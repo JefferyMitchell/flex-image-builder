@@ -1,0 +1,17 @@
+title: Flex Image Builder
+description: Reference implementation for Citrix Platform Flex catalog deployment via Terraform
+baseurl: "/flex-image-builder"
+url: "https://jefferymitchell.github.io"
+
+theme: just-the-docs
+
+aux_links:
+  "GitHub":
+    - "https://github.com/JefferyMitchell/flex-image-builder"
+
+aux_links_new_tab: true
+
+nav_sort: order
+
+plugins:
+  - jekyll-seo-tag
