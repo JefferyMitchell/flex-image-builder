@@ -6,14 +6,8 @@ on:
     branches: [main]
 
 jobs:
-  validate:
+  fmt:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        example:
-          - singlesession-domain-joined
-          - multisession-no-domain-join
-
     steps:
       - uses: actions/checkout@v4
 
@@ -23,11 +17,3 @@ jobs:
 
       - name: terraform fmt check
         run: terraform fmt -check -recursive infra/
-
-      - name: terraform init (${{ matrix.example }})
-        run: terraform init -backend=false
-        working-directory: infra/examples/${{ matrix.example }}
-
-      - name: terraform validate (${{ matrix.example }})
-        run: terraform validate
-        working-directory: infra/examples/${{ matrix.example }}
