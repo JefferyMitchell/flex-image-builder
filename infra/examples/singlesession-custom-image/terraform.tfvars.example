@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars and fill in values.
+# NEVER commit terraform.tfvars — it is git-ignored.
+
+# Citrix Cloud credentials
+citrix_customer_id   = ""
+citrix_client_id     = ""
+# Pass citrix_client_secret via environment variable:
+#   PowerShell: $env:TF_VAR_citrix_client_secret = "..."
+#   bash:       export TF_VAR_citrix_client_secret="..."
+
+# Custom image
+# vhd_uri is output by packer/scripts/powershell/03-export-image.ps1
+image_name         = "WinServer2025-VDA2507"
+vhd_uri            = ""
+os_platform        = "Windows"
+machine_generation = "V2"
+image_notes        = "Built with citrix-packer-tools v2507. Windows Server 2025, VDA 2507."
+
+# Catalog
+catalog_name                 = "MyOrg-KnowledgeWorker-Custom"
+persona                      = "Knowledge worker"
+region                       = "eastus"
+number_of_users              = 10
+onprem_network_connection_id = ""   # from Citrix Cloud > Network Connections
+
+# Domain join — remove these three if not domain-joining
+domain_name     = "corp.example.com"
+domain_ou       = "OU=Citrix-Servers,DC=corp,DC=example,DC=com"
+service_account = "citrixsp"
+# Pass service_account_password via environment variable:
+#   PowerShell: $env:TF_VAR_service_account_password = "..."
+#   bash:       export TF_VAR_service_account_password="..."

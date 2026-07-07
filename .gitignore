@@ -1,3 +1,9 @@
+# Packer variable files (contain secrets)
+*.pkrvars.hcl
+
+# citrix-packer-tools (cloned locally by build script, not part of this repo)
+citrix-packer-tools/
+
 # Terraform state and sensitive files
 *.tfstate
 *.tfstate.backup

@@ -1,0 +1,35 @@
+# Packer variables for Windows Server 2025 + VDA 2507
+# Copy to win_server_2025.pkrvars.hcl and fill in values.
+# NEVER commit the filled-in file — it contains secrets.
+
+# ── Azure service principal ────────────────────────────────────────────────────
+client_id              = ""   # SP application (client) ID
+client_secret          = ""   # SP client secret — keep out of source control
+client_object_id       = ""   # SP object ID (az ad sp show --id <client_id> --query id)
+client_tenant_id       = ""   # Azure AD tenant ID
+client_subscription_id = ""   # Subscription ID where the build VM will run
+
+# ── Build target ───────────────────────────────────────────────────────────────
+image_resource_group = "rg-flex-packer-build"   # Must exist before running packer
+image_name           = "win_server_2025_dc"      # Timestamp is appended automatically
+
+# ── Installer locations (Azure Blob Storage SAS URLs) ─────────────────────────
+# Run 01-upload-installers to stage these files and get SAS URLs.
+vda_location       = "https://<storage-account>.blob.core.windows.net/<container>/VDASetup.exe?<sas-token>"
+optimizer_location = "https://<storage-account>.blob.core.windows.net/<container>/CitrixOptimizer.zip?<sas-token>"
+
+# Optimizer XML template name inside the CitrixOptimizer.zip archive.
+# Common values:
+#   Windows Server 2025: Citrix_Windows_Server_2025.xml
+#   Windows Server 2022: Citrix_Windows_Server_2022.xml
+#   Windows 11 23H2:     Citrix_Windows_11_2009.xml
+optimizer_template = "Citrix_Windows_Server_2025.xml"
+
+# ── Build VM credentials (temporary, used only during Packer build) ────────────
+userpass       = ""    # WinRM password for the temporary build VM
+winrm_insecure = true
+
+# ── Optional ───────────────────────────────────────────────────────────────────
+install_browser_chrome_flag = true
+install_browser_firefox_flag = false
+location_setup = "c:\\setup"
