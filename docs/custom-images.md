@@ -16,10 +16,6 @@ nav_order: 6
 
 ---
 
-> **Status: Coming Soon.** This section documents the planned custom image pipeline. Validation of `citrix_quickdeploy_template_image` end-to-end is in progress. The Terraform resource schema is documented here for reference.
-
----
-
 ## Why Custom Images
 
 Citrix provides ready-made base images (Windows 11 Pro, Windows Server 2022/2025 with VDA pre-installed). These are sufficient for general deployments.
@@ -30,80 +26,210 @@ Custom images are needed when you want to:
 - Control exactly which VDA version is deployed
 - Enforce OS hardening baselines before machines are provisioned
 
+---
+
 ## Pipeline Overview
 
 ```
-citrix-packer-tools          Your Azure subscription         Platform Flex
-───────────────────          ─────────────────────────       ──────────────────────────────────
-Packer build (local   →      Temp VM spins up          →     citrix_quickdeploy_template_image
-CLI or CI runner)            VDA + apps installed             registers image in Flex library
-                             Image captured as
-                             Managed Image
-                             Temp VM deleted
-                                                         →    citrix_quickdeploy_catalog
-                                                              references image by ID
+Step 1 — Azure setup          Step 2 — Stage installers     Step 3 — Packer build
+─────────────────────         ──────────────────────────    ──────────────────────
+00-setup-azure         →      01-upload-installers    →     02-build
+Create RG, storage            Upload VDA + Optimizer        Clone citrix-packer-tools
+account, service              Generate SAS URLs             Run packer build
+principal                                                   Output: Managed Image
+                                                                    in your Azure sub
+
+Step 4 — Export VHD           Step 5 — Register + deploy
+────────────────────          ──────────────────────────
+03-export-image        →      terraform apply
+Copy Managed Image to         citrix_quickdeploy_template_image
+VHD blob                      registers image in Flex library
+Get blob URI                  citrix_quickdeploy_catalog
+                              provisions machines from it
 ```
 
-## citrix-packer-tools
+Scripts are provided in both PowerShell (`packer/scripts/powershell/`) and bash (`packer/scripts/bash/`).
 
-[github.com/citrix/citrix-packer-tools](https://github.com/citrix/citrix-packer-tools) provides Packer templates for:
+---
 
-- Windows 10/11 (Desktop, Office editions)
-- Windows Server 2019 / 2022 / 2025
-- VDA versions: 2407, 2411, 2503, 2507
+## Step 1 — Azure Setup
 
-Packer runs on your local machine or CI runner. The build happens in your customer Azure subscription — Packer spins up a temporary VM, provisions it, captures the image, and deletes the VM. The resulting Managed Image stays in your resource group.
-
-**Prerequisites for a Packer build:**
-- Packer installed locally
-- Azure service principal with Contributor access to the target resource group
-- Azure Storage Account with VDA installer and Citrix Optimizer pre-staged as blobs
-- Customer-owned Azure subscription (not the Citrix Managed subscription)
-
-## Terraform Resource
-
-```hcl
-resource "citrix_quickdeploy_template_image" "custom_image" {
-  name               = "Win11-VDA2507-AppImage"
-  os_platform        = "Windows"
-  machine_generation = "V2"
-  region             = "eastus"
-  subscription_name  = "Citrix Managed"
-  notes              = "Built with citrix-packer-tools v2507. Win 11 Pro, VDA 2507."
-  vhd_uri            = var.packer_image_vhd_uri
-}
-
-resource "citrix_quickdeploy_catalog" "custom" {
-  name              = var.catalog_name
-  persona           = "Knowledge worker"
-  catalog_type      = "SingleSessionStatic"
-  region            = "eastus"
-  subscription_name = "Citrix Managed"
-  template_image_id = citrix_quickdeploy_template_image.custom_image.id
-  number_of_users   = var.number_of_users
-
-  # ... on_prem_connectivity, power_schedule
-}
-```
-
-### Getting the VHD URI
-
-After a Packer build completes, retrieve the VHD URI from the resulting Azure Managed Image:
+Run once per environment. Creates the resource group, storage account, and service principal.
 
 **PowerShell:**
 ```powershell
-$img = Get-AzImage -ResourceGroupName "your-rg" -ImageName "win_desktop_11_v2507_20260624"
-$img.StorageProfile.OsDisk.BlobUri
+.\packer\scripts\powershell\00-setup-azure.ps1 `
+    -SubscriptionId "your-azure-subscription-id" `
+    -Location eastus `
+    -Prefix flex-packer
 ```
 
-**Azure CLI (bash):**
+**bash:**
 ```bash
-az image show \
-  --resource-group your-rg \
-  --name win_desktop_11_v2507_20260624 \
-  --query storageProfile.osDisk.blobUri -o tsv
+./packer/scripts/bash/00-setup-azure.sh \
+    --subscription "your-azure-subscription-id" \
+    --location eastus \
+    --prefix flex-packer
 ```
 
-This URI is passed as `var.packer_image_vhd_uri` to the Terraform resource.
+The script outputs the SP credentials and resource names to paste into your Packer variables file.
 
-> **Note:** The VHD must be accessible to the Citrix Managed Azure subscription. Full validation of this access pattern is in progress.
+---
+
+## Step 2 — Stage Installers
+
+Download the VDA installer and Citrix Optimizer from [Citrix Downloads](https://www.citrix.com/downloads/) (requires Citrix account), then upload them to Azure Blob Storage.
+
+**PowerShell:**
+```powershell
+.\packer\scripts\powershell\01-upload-installers.ps1 `
+    -StorageAccount flexpackerbuild `
+    -VdaPath C:\Downloads\VDASetup.exe `
+    -OptimizerPath C:\Downloads\CitrixOptimizer.zip
+```
+
+**bash:**
+```bash
+./packer/scripts/bash/01-upload-installers.sh \
+    --storage-account flexpackerbuild \
+    --vda-path ~/Downloads/VDASetup.exe \
+    --optimizer-path ~/Downloads/CitrixOptimizer.zip
+```
+
+The script generates time-limited SAS URLs and prints them. Copy these into your `.pkrvars.hcl` file.
+
+> **SAS expiry:** URLs are valid for 4 hours by default. Start your Packer build promptly. Re-run the script to generate fresh URLs if needed.
+
+---
+
+## Step 3 — Configure Packer Variables
+
+Copy the appropriate example file from `packer/variables/` and fill in all values:
+
+```bash
+cp packer/variables/win_server_2025.pkrvars.hcl.example \
+   packer/variables/win_server_2025.pkrvars.hcl
+```
+
+The filled-in file is git-ignored — never commit it.
+
+### Optimizer template names
+
+| OS | optimizer_template value |
+|----|--------------------------|
+| Windows Server 2025 | `Citrix_Windows_Server_2025.xml` |
+| Windows Server 2022 | `Citrix_Windows_Server_2022.xml` |
+| Windows Server 2019 | `Citrix_Windows_Server_2019.xml` |
+| Windows 11 23H2     | `Citrix_Windows_11_2009.xml` |
+
+---
+
+## Step 4 — Run Packer Build
+
+**PowerShell:**
+```powershell
+.\packer\scripts\powershell\02-build.ps1 `
+    -VarsFile win_server_2025.pkrvars.hcl `
+    -Os win_server_2025_dc `
+    -VdaVersion v2507
+```
+
+**bash:**
+```bash
+./packer/scripts/bash/02-build.sh \
+    --vars-file win_server_2025.pkrvars.hcl \
+    --os win_server_2025_dc \
+    --vda-version v2507
+```
+
+The build script clones `citrix-packer-tools` automatically if not present. Build time is approximately 30–60 minutes depending on region and OS.
+
+### Available OS templates
+
+| Template name | OS |
+|---------------|----|
+| `win_desktop_11_23h2` | Windows 11 23H2 (Desktop) |
+| `win_office_11_23h2`  | Windows 11 23H2 (with Office) |
+| `win_server_2019_dc`  | Windows Server 2019 Datacenter |
+| `win_server_2022_dc`  | Windows Server 2022 Datacenter |
+| `win_server_2025_dc`  | Windows Server 2025 Datacenter |
+
+---
+
+## Step 5 — Export VHD
+
+Packer creates an Azure Managed Image. The `citrix_quickdeploy_template_image` resource requires a VHD blob URI, so this step copies the image to a storage account blob.
+
+**PowerShell:**
+```powershell
+.\packer\scripts\powershell\03-export-image.ps1 `
+    -ResourceGroup rg-flex-packer-build `
+    -ImageName win_server_2025_dc_202506261200 `
+    -StorageAccount flexpackerbuild `
+    -SubscriptionId "your-azure-subscription-id"
+```
+
+**bash:**
+```bash
+./packer/scripts/bash/03-export-image.sh \
+    --resource-group rg-flex-packer-build \
+    --image-name win_server_2025_dc_202506261200 \
+    --storage-account flexpackerbuild \
+    --subscription "your-azure-subscription-id"
+```
+
+The script prints the VHD URI. Copy it into `terraform.tfvars`:
+
+```hcl
+vhd_uri = "https://flexpackerbuild.blob.core.windows.net/vhd-output/win_server_2025_dc_202506261200.vhd"
+```
+
+> **Export time:** Copying a 30–40 GB OS disk typically takes 5–15 minutes.
+
+---
+
+## Step 6 — Deploy with Terraform
+
+Use the `singlesession-custom-image` example:
+
+```bash
+cd infra/examples/singlesession-custom-image
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your values
+terraform init
+terraform plan
+terraform apply
+```
+
+### What gets created
+
+```hcl
+resource "citrix_quickdeploy_template_image" "this" {
+  name               = var.image_name
+  os_platform        = "Windows"
+  machine_generation = "V2"
+  region             = var.region
+  subscription_name  = "Citrix Managed"
+  vhd_uri            = var.vhd_uri
+}
+
+module "catalog" {
+  source            = "../../modules/catalog-singlesession"
+  template_image_id = citrix_quickdeploy_template_image.this.id
+  # ...
+}
+```
+
+Terraform registers the image in Citrix's library, then creates a catalog that uses it. The image appears in Citrix Cloud > Full Configuration > Machine Catalogs after apply.
+
+---
+
+## Updating an Image
+
+When you build a new version of the image:
+
+1. Run steps 3–5 to produce a new VHD URI
+2. Update `vhd_uri` in `terraform.tfvars`
+3. `terraform apply` — Citrix will update the catalog to use the new image
+
+Existing sessions are not interrupted immediately; machines are re-imaged on next restart.
