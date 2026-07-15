@@ -22,24 +22,35 @@ $ErrorActionPreference = "Stop"
 Write-Host "`nSetting subscription..."
 az account set --subscription $SubscriptionId
 
-Write-Host "Looking up managed image: $ImageName..."
-$diskId = (az image show `
+Write-Host "Looking up snapshot for image: $ImageName..."
+$snapshotId = (az snapshot show `
     --resource-group $ResourceGroup `
     --name $ImageName `
-    --query "storageProfile.osDisk.managedDisk.id" -o tsv)
+    --query "id" -o tsv 2>$null)
 
-if (-not $diskId) {
-    Write-Error "Could not find managed disk for image '$ImageName'. Verify the image name in the resource group."
+if (-not $snapshotId) {
+    # Packer didn't leave a snapshot — create a temporary disk from the image instead
+    Write-Host "No snapshot found. Creating temporary managed disk from image (this takes ~2 min)..."
+    $tempDiskName = "$ImageName-export-tmp"
+    $imageId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Compute/images/$ImageName"
+    az disk create `
+        --resource-group $ResourceGroup `
+        --name $tempDiskName `
+        --source $imageId `
+        --location eastus | Out-Null
+    $snapshotId = (az disk show --resource-group $ResourceGroup --name $tempDiskName --query id -o tsv)
+    $usedTempDisk = $true
+} else {
+    Write-Host "Found snapshot: $snapshotId"
+    $usedTempDisk = $false
 }
 
-$diskName = $diskId.Split("/")[-1]
-Write-Host "OS disk: $diskName"
-
-Write-Host "Granting SAS access to disk (24h)..."
-$sas = (az disk grant-access `
-    --ids $diskId `
-    --duration-in-seconds 86400 `
-    --query accessSas -o tsv)
+Write-Host "Granting SAS access (24h)..."
+$sas = if ($usedTempDisk) {
+    (az disk grant-access --ids $snapshotId --duration-in-seconds 86400 --query accessSas -o tsv)
+} else {
+    (az snapshot grant-access --ids $snapshotId --duration-in-seconds 86400 --query accessSas -o tsv)
+}
 
 $saKey     = (az storage account keys list --account-name $StorageAccount --resource-group $ResourceGroup --query "[0].value" -o tsv)
 $blobName  = "$ImageName.vhd"
@@ -68,8 +79,14 @@ if ($status -ne "success") {
     Write-Error "VHD copy failed with status: $status"
 }
 
-Write-Host "Revoking disk SAS access..."
-az disk revoke-access --ids $diskId | Out-Null
+Write-Host "Revoking SAS access..."
+if ($usedTempDisk) {
+    az disk revoke-access --ids $snapshotId | Out-Null
+    Write-Host "Deleting temporary disk..."
+    az disk delete --ids $snapshotId --yes | Out-Null
+} else {
+    az snapshot revoke-access --ids $snapshotId | Out-Null
+}
 
 $vhdUri = (az storage blob url `
     --container-name $OutputContainer `
