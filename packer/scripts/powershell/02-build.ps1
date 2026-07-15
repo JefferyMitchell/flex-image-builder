@@ -1,13 +1,12 @@
 # 02-build.ps1
-# Clones citrix-packer-tools (if needed) and runs a Packer build.
+# Runs a Packer build using our patched templates (SAS URL quoting fix applied).
+# Clones citrix-packer-tools for the provisioner scripts; uses our template copy.
 #
 # Usage:
-#   .\02-build.ps1 -VarsFile win_server_2025.pkrvars.hcl -Os win_server_2025_dc -VdaVersion v2507
+#   .\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -VdaVersion v2507
 #
-# OS options (match citrix-packer-tools template names):
-#   win_desktop_11_23h2, win_office_11_23h2, win_server_11_23h2,
-#   win_server_2019_dc,  win_server_2022_dc,  win_server_2025_dc
-#
+# OS options: win_server_2025_dc, win_server_2022_dc, win_server_2019_dc,
+#             win_desktop_11_23h2, win_office_11_23h2
 # VDA version options: v2407, v2411, v2503, v2507
 
 param(
@@ -25,18 +24,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Resolve vars file path
 $scriptDir = $PSScriptRoot
+$repoRoot  = Resolve-Path (Join-Path $scriptDir "..\..\..")
+
+# Resolve vars file path
 $varsFilePath = $VarsFile
 if (-not [System.IO.Path]::IsPathRooted($VarsFile)) {
-    $varsFilePath = Join-Path (Join-Path $scriptDir "..\..\variables") $VarsFile
+    $varsFilePath = Join-Path $repoRoot "packer\variables\$VarsFile"
 }
 if (-not (Test-Path $varsFilePath)) {
     Write-Error "Vars file not found: $varsFilePath"
 }
 
-# Clone citrix-packer-tools if not present
-$packerToolsDir = Join-Path $scriptDir "..\..\..\citrix-packer-tools"
+# Clone citrix-packer-tools if not present (needed for provisioner scripts)
+$packerToolsDir = Join-Path $repoRoot "citrix-packer-tools"
 if (-not (Test-Path $packerToolsDir)) {
     Write-Host "Cloning citrix-packer-tools..."
     git clone https://github.com/citrix/citrix-packer-tools.git $packerToolsDir
@@ -45,20 +46,31 @@ if (-not (Test-Path $packerToolsDir)) {
     git -C $packerToolsDir pull
 }
 
-$templateDir  = Join-Path $packerToolsDir "azure\$VdaVersion"
-$templateFile = Join-Path $templateDir "${Os}_packer_template.json"
-
-if (-not (Test-Path $templateFile)) {
-    Write-Error "Template not found: $templateFile`nCheck -Os and -VdaVersion values."
+# Use our patched template (fixes SAS URL quoting for PowerShell inline provisioners)
+$patchedTemplate = Join-Path $repoRoot "packer\templates\${Os}_packer_template.json"
+if (-not (Test-Path $patchedTemplate)) {
+    Write-Error "Patched template not found: $patchedTemplate`nOnly win_server_2025_dc has a patched template so far."
 }
 
+# The template references OS-version-specific scripts via relative paths (.\ and ..\scripts\)
+# so we must run packer from the citrix-packer-tools version directory, with our template file
+$versionDir = Join-Path $packerToolsDir "azure\$VdaVersion"
+
+Write-Host "`nEnsuring Packer Azure plugin is installed..."
+packer plugins install github.com/hashicorp/azure
+
 Write-Host "`nRunning Packer build..."
-Write-Host "  Template : $templateFile"
+Write-Host "  Template : $patchedTemplate"
+Write-Host "  Scripts  : $versionDir"
 Write-Host "  Vars     : $varsFilePath"
 Write-Host ""
 
-packer build -var-file="$varsFilePath" "$templateFile"
-
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Push-Location $versionDir
+try {
+    packer build -var-file="$varsFilePath" "$patchedTemplate"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
 
 Write-Host "`nBuild complete. Run 03-export-image.ps1 to get the VHD URI for Terraform."
