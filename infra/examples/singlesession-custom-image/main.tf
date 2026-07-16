@@ -19,6 +19,6 @@ module "catalog" {
   onprem_network_connection_id = var.onprem_network_connection_id
   domain_name                  = var.domain_name
   domain_ou                    = var.domain_ou
-  service_account              = var.service_account
-  service_account_password     = var.service_account_password
+  domain_service_account          = var.service_account
+  domain_service_account_password = var.service_account_password
 }

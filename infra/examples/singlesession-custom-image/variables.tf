@@ -1,11 +1,6 @@
 # ── Citrix provider ────────────────────────────────────────────────────────────
 variable "citrix_customer_id" { type = string }
 variable "citrix_client_id"   { type = string }
-variable "citrix_client_secret" {
-  type      = string
-  sensitive = true
-}
-
 # ── Custom image ───────────────────────────────────────────────────────────────
 variable "image_name" {
   type        = string
