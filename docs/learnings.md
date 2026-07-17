@@ -49,10 +49,17 @@ and the Citrix Terraform provider. Each layer surfaced distinct learnings.
   copy API cannot handle internal Azure snapshot URLs (`*.blob.storage.azure.net`) and
   must not be used as a substitute.
 
-- **The export scripts work end-to-end** for both the snapshot workflow
-  (`03-export-image.ps1`) and the Azure Compute Gallery workflow
-  (`04-export-from-gallery.ps1`). Both produce the `vhd_uri` and `guest_disk_uri` SAS
-  URIs that `citrix_quickdeploy_template_image` expects.
+- **The snapshot export script (`03-export-image.ps1`) works end-to-end.** The REST
+  `beginGetAccess` approach with `getSecureVMGuestStateSAS: true` returns both the OS SAS
+  and VMGS SAS from a TrustedLaunch snapshot. AzCopy transfers both to blob storage and
+  the script outputs the `vhd_uri` and `guest_disk_uri` SAS URIs that
+  `citrix_quickdeploy_template_image` expects.
+
+- **The gallery export script (`04-export-from-gallery.ps1`) works end-to-end.** The
+  approach uses a temporary managed disk created from the gallery image version, then
+  `az disk grant-access --secure-vm-guest-state-sas` to obtain the OS SAS and VMGS SAS.
+  Confirmed: a TrustedLaunch gallery image version returns the VMGS SAS via this path.
+  The temporary disk is deleted after AzCopy completes.
 
 - **The Citrix provider (v1.0.37) accepts `secure_boot_enabled` and `vtpm_enabled`**
   in the schema — the attributes exist and are settable in principle.
@@ -150,8 +157,28 @@ The response is an LRO (202 Accepted). Poll the `Azure-AsyncOperation` header UR
 `status == "Succeeded"`, then read `properties.output.accessSAS` (OS disk) and
 `properties.output.securityDataAccessSAS` (VMGS).
 
-The same pattern applies to Azure Compute Gallery image versions — same endpoint shape,
-same response structure.
+### Azure Compute Gallery image versions do not support `beginGetAccess`
+
+Unlike snapshots and managed disks, gallery image versions do **not** have a
+`beginGetAccess` REST endpoint. Attempting to call it returns either
+`NoRegisteredProviderFound` (wrong API version) or `RequestUrlInvalid` (any API version).
+
+To export OS VHD + VMGS from a gallery image version:
+
+1. Create a temporary managed disk from the gallery image version:
+   ```
+   az disk create --gallery-image-reference <version-resource-id> --security-type TrustedLaunch
+   ```
+   The `--security-type TrustedLaunch` flag is required for TrustedLaunch gallery images.
+   Without it, Azure returns: *"supports creation of OS disk only with SecurityType as TrustedLaunch."*
+
+2. Use `az disk grant-access --secure-vm-guest-state-sas` — this CLI flag IS supported
+   for managed disks and returns both `accessSAS` (OS disk) and `securityDataAccessSAS`
+   (VMGS) in one call. This is a completely different flag name from the snapshot path.
+
+3. AzCopy both SAS URLs to destination storage, then delete the temporary disk.
+
+The `04-export-from-gallery.ps1` script implements this end-to-end.
 
 ### Provider validates config on every Terraform operation
 
@@ -196,8 +223,7 @@ line from HCL is currently the only workaround for `terraform destroy`.
 - **Fix the Packer template** to use `shared_image_gallery_destination` instead of
   `managed_image_name` so that builds succeed end-to-end without manual snapshot recovery.
 
-- **Test the `04-export-from-gallery.ps1` script** against a real customer gallery image
-  to validate the response shape differences between snapshot and gallery versions.
+- **`04-export-from-gallery.ps1` is validated.** Tested against `FlexPackerGallery/WinServer2025DC/1.0.0` (TrustedLaunch, created from a TrustedLaunch snapshot). Both OS SAS and VMGS SAS returned successfully via `az disk grant-access --secure-vm-guest-state-sas`.
 
 - **Verify Trusted Launch end-to-end** once the provider validation issue is resolved:
   RDP into a catalog VM and run `Confirm-SecureBootUEFI` — should return `True`.
