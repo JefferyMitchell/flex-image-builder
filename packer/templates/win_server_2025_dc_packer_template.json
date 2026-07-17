@@ -42,11 +42,12 @@
     "managed_image_name":                  "{{user `image_name`}}_{{ isotime \"200601020304\" }}",
     "managed_image_resource_group_name":   "{{user `image_resource_group`}}",
 
-    "os_type":        "Windows",
-    "image_publisher": "MicrosoftWindowsServer",
-    "image_offer":     "WindowsServer",
-    "image_sku":       "2025-Datacenter",
-    "image_version":   "latest",
+    "os_type":          "Windows",
+    "image_publisher":  "MicrosoftWindowsServer",
+    "image_offer":      "WindowsServer",
+    "image_sku":        "2025-datacenter-g2",
+    "image_version":    "latest",
+    "security_type":    "TrustedLaunch",
 
     "communicator":    "winrm",
     "winrm_use_ssl":   true,

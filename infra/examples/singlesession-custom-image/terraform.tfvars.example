@@ -8,17 +8,20 @@ citrix_client_id     = ""
 #   PowerShell: $env:TF_VAR_citrix_client_secret = "..."
 #   bash:       export TF_VAR_citrix_client_secret="..."
 
-# Custom image
-# vhd_uri is output by packer/scripts/powershell/03-export-image.ps1
-image_name         = "WinServer2025-VDA2507"
-vhd_uri            = ""
-os_platform        = "Windows"
-machine_generation = "V2"
-image_notes        = "Built with citrix-packer-tools v2507. Windows Server 2025, VDA 2507."
+# Custom image — both URIs are output by packer/scripts/powershell/03-export-image.ps1
+# Rebuild Packer with security_type = "TrustedLaunch" in the template to enable VMGS output.
+image_name          = "WinServer2025-VDA2507"
+vhd_uri             = ""   # SAS URI: <storage>.blob.core.windows.net/vhd-output/<name>.vhd?<sas>
+guest_disk_uri      = ""   # SAS URI: <storage>.blob.core.windows.net/vhd-output/<name>-vmgs.vhd?<sas>
+os_platform         = "Windows"
+machine_generation  = "V2"
+secure_boot_enabled = true
+vtpm_enabled        = true
+image_notes         = "Built with citrix-packer-tools v2507. Windows Server 2025 (Gen2, Trusted Launch), VDA 2507."
 
 # Catalog
-catalog_name                 = "MyOrg-KnowledgeWorker-Custom"
-persona                      = "Knowledge worker"
+catalog_name                 = "MyOrg-TaskWorker-Custom"
+persona                      = "Task worker (medium)"
 region                       = "eastus"
 number_of_users              = 10
 onprem_network_connection_id = ""   # from Citrix Cloud > Network Connections
