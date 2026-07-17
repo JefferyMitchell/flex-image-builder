@@ -8,6 +8,7 @@ citrix-packer-tools/
 # Terraform state and sensitive files
 *.tfstate
 *.tfstate.backup
+*.tfstate.*.backup
 *.tfvars
 .terraform/
 .terraform.lock.hcl
