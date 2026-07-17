@@ -56,22 +56,36 @@ $snapshotSecurityType = $snapshotJson.securityProfile.securityType
 Write-Host "  Snapshot state        : $snapshotState"
 Write-Host "  Snapshot security type: $(if ($snapshotSecurityType) { $snapshotSecurityType } else { '(none — not a Trusted Launch snapshot)' })"
 
-if ($snapshotState -eq "ActiveSAS") {
-    Write-Host "Revoking existing SAS before re-granting..."
-    az snapshot revoke-access --ids $snapshotId | Out-Null
-    Start-Sleep -Seconds 3
+# Revoke any active SAS before re-granting (REST — works regardless of snapshot state).
+# az snapshot grant-access does not support --security-data-access-level in az CLI ≤2.88;
+# use the Compute REST API directly with getSecureVMGuestStateSAS to get the VMGS SAS.
+Write-Host "`nRevoking any active SAS (REST)..."
+$azToken   = (az account get-access-token --subscription $SubscriptionId --query accessToken -o tsv 2>$null)
+$authHdr   = @{ Authorization = "Bearer $azToken"; "Content-Type" = "application/json" }
+$baseUrl   = "https://management.azure.com$snapshotId"
+try { Invoke-RestMethod -Method POST -Uri "$baseUrl/endGetAccess?api-version=2024-03-02" -Headers $authHdr -Body "{}" | Out-Null } catch {}
+Start-Sleep -Seconds 3
+
+Write-Host "Granting 24h read SAS on snapshot (including VMGS data if TrustedLaunch)..."
+$grantResp = Invoke-WebRequest -Method POST -Uri "$baseUrl/beginGetAccess?api-version=2024-03-02" `
+    -Headers $authHdr -Body '{"access":"Read","durationInSeconds":86400,"getSecureVMGuestStateSAS":true}' -UseBasicParsing
+if ($grantResp.StatusCode -ne 202) { Write-Error "beginGetAccess returned $($grantResp.StatusCode)" }
+
+$asyncUrl = ([string[]]($grantResp.Headers["Azure-AsyncOperation"]))[0]
+$sasOut   = $null
+for ($i = 1; $i -le 24; $i++) {
+    $poll = Invoke-RestMethod -Method GET -Uri $asyncUrl -Headers $authHdr
+    if ($poll.status -eq "Succeeded") { $sasOut = $poll.properties.output; break }
+    if ($poll.status -eq "Failed")    { Write-Error "Grant-access operation failed: $($poll | ConvertTo-Json -Depth 4)" }
+    Write-Host "  Waiting for SAS grant ($i/24)..."
+    Start-Sleep -Seconds 5
 }
+if (-not $sasOut) { Write-Error "Timed out waiting for SAS grant operation" }
 
-# Grant SAS — request VMGS security data access in addition to OS disk access.
-# securityDataAccessSAS is only populated when the snapshot has a Trusted Launch security profile.
-Write-Host "`nGranting 24h read SAS on snapshot (including VMGS data if TrustedLaunch)..."
-$sasJson    = (az snapshot grant-access --ids $snapshotId --duration-in-seconds 86400 `
-                   --security-data-access-level Read 2>&1) -join "`n"
-$sasObj     = $sasJson | ConvertFrom-Json
-$sourceSas  = $sasObj.accessSAS
-$vmgsSas    = $sasObj.securityDataAccessSAS
+$sourceSas = $sasOut.accessSAS
+$vmgsSas   = $sasOut.securityDataAccessSAS
 
-if (-not $sourceSas) { Write-Error "Failed to get SAS from snapshot. Raw output:`n$sasJson" }
+if (-not $sourceSas) { Write-Error "accessSAS not returned by grant-access operation" }
 Write-Host "  OS SAS obtained  (length $($sourceSas.Length))."
 if ($vmgsSas) {
     Write-Host "  VMGS SAS obtained (length $($vmgsSas.Length)) — Trusted Launch snapshot confirmed."
@@ -81,8 +95,10 @@ if ($vmgsSas) {
 }
 
 # Storage account key for destination SAS generation
+# !! Use UtcNow — (Get-Date) returns LOCAL time. Appending "Z" tells Azure it's UTC, which is
+# !! wrong on machines not in UTC. Azure rejects the SAS if expiry is before signed-start time.
 $saKey   = (az storage account keys list --account-name $StorageAccount --resource-group $ResourceGroup --query "[0].value" -o tsv)
-$expiry  = (Get-Date).AddHours(25).ToString("yyyy-MM-ddTHH:mmZ")
+$expiry  = [System.DateTime]::UtcNow.AddHours(25).ToString("yyyy-MM-ddTHH:mmZ")
 
 # ── OS disk copy ──────────────────────────────────────────────────────────────
 $destContainerSas = (az storage container generate-sas `
@@ -114,7 +130,8 @@ if ($vmgsSas) {
 }
 
 Write-Host "`nRevoking snapshot SAS..."
-az snapshot revoke-access --ids $snapshotId | Out-Null
+try { Invoke-RestMethod -Method POST -Uri "$baseUrl/endGetAccess?api-version=2024-03-02" -Headers $authHdr -Body "{}" | Out-Null } catch {}
+Start-Sleep -Seconds 2
 
 # ── Output blob SAS for the OS VHD ───────────────────────────────────────────
 $blobExpiry = (Get-Date).AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
