@@ -1,46 +1,11 @@
 # ── Citrix provider ────────────────────────────────────────────────────────────
 variable "citrix_customer_id" { type = string }
 variable "citrix_client_id"   { type = string }
-# ── Custom image ───────────────────────────────────────────────────────────────
+
+# ── Custom image lookup ────────────────────────────────────────────────────────
 variable "image_name" {
   type        = string
-  description = "Display name for the image in the Citrix library."
-}
-
-variable "vhd_uri" {
-  type        = string
-  description = "Azure Blob SAS URI of the exported OS disk VHD. Output of 03-export-image.ps1."
-}
-
-variable "guest_disk_uri" {
-  type        = string
-  description = "Azure Blob SAS URI of the VM Guest State (VMGS) disk. Required when secure_boot_enabled = true. Output of 03-export-image.ps1 when built with security_type = TrustedLaunch."
-  default     = null
-}
-
-variable "os_platform" {
-  type    = string
-  default = "Windows"
-}
-
-variable "machine_generation" {
-  type    = string
-  default = "V2"
-}
-
-variable "secure_boot_enabled" {
-  type    = bool
-  default = true
-}
-
-variable "vtpm_enabled" {
-  type    = bool
-  default = true
-}
-
-variable "image_notes" {
-  type    = string
-  default = ""
+  description = "Display name of the image as it appears in the Citrix Cloud library. Created in the portal; Terraform looks it up via data source."
 }
 
 # ── Catalog ────────────────────────────────────────────────────────────────────

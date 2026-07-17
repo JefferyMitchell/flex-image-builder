@@ -49,7 +49,7 @@ if (-not (Test-Path $packerToolsDir)) {
 # Use our patched template (fixes SAS URL quoting for PowerShell inline provisioners)
 $patchedTemplate = Join-Path $repoRoot "packer\templates\${Os}_packer_template.json"
 if (-not (Test-Path $patchedTemplate)) {
-    Write-Error "Patched template not found: $patchedTemplate`nOnly win_server_2025_dc has a patched template so far."
+    Write-Error "Patched template not found: $patchedTemplate`nAvailable patched templates: win_server_2025_dc, win_desktop_11_23h2"
 }
 
 # The template references OS-version-specific scripts via relative paths (.\ and ..\scripts\)
