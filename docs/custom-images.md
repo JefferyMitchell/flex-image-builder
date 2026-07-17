@@ -566,8 +566,6 @@ This is the **only workaround** — passing `-var "guest_disk_uri=null"` on the 
 
 If images are already published to an Azure Compute Gallery (via Azure Image Builder, a customer's Packer pipeline, or any other build process), use `packer/scripts/powershell/04-export-from-gallery.ps1` instead of the snapshot-based `03-export-image.ps1`.
 
-The gallery export script uses the same REST API pattern (`getSecureVMGuestStateSAS`) to capture both the OS VHD and VMGS blob, then AzCopies both to a destination storage account and outputs the `vhd_uri` and `guest_disk_uri` SAS URIs for Terraform.
-
 ```powershell
 .\packer\scripts\powershell\04-export-from-gallery.ps1 `
     -GallerySubscriptionId <gallery-subscription-id> `
@@ -582,7 +580,28 @@ The gallery export script uses the same REST API pattern (`getSecureVMGuestState
 
 `GallerySubscriptionId` and `DestSubscriptionId` can be different — this is the typical customer scenario where the gallery and the Citrix-facing storage are in different Azure subscriptions.
 
-The gallery image must have been published with `security_type = TrustedLaunch` for the VMGS SAS to be returned. Images without Trusted Launch will produce a `vhd_uri` only; the script outputs `secure_boot_enabled = false` in that case.
+### How the gallery script works
+
+The Azure Compute REST API `beginGetAccess` endpoint — which returns the VMGS SAS for snapshots — does not exist for gallery image versions. The gallery export script uses a different path:
+
+1. Creates a temporary managed disk from the gallery image version using `az disk create --gallery-image-reference`.
+2. For TrustedLaunch images, detects the security type from the image definition and passes `--security-type TrustedLaunch` to `az disk create`. Without this flag, Azure rejects the disk creation: *"The provided gallery image supports creation of OS disk only with SecurityType as TrustedLaunch."*
+3. Calls `az disk grant-access --secure-vm-guest-state-sas` — the managed disk CLI command exposes this flag natively (unlike `az snapshot grant-access`, which does not support a VMGS flag in az CLI).
+4. AzCopies the OS VHD and VMGS to destination blob storage.
+5. Deletes the temporary managed disk.
+
+This means a managed disk of the full image size is created and billed for the duration of the export (~10–30 minutes). Use Standard_LRS to minimize cost.
+
+### Key differences from the snapshot path
+
+| | Snapshot (`03-export-image.ps1`) | Gallery (`04-export-from-gallery.ps1`) |
+|---|---|---|
+| VMGS access method | REST `beginGetAccess` with `getSecureVMGuestStateSAS` | `az disk grant-access --secure-vm-guest-state-sas` |
+| az CLI VMGS flag | ❌ Not supported (`--security-data-access-level Read` is unrecognized) | ✅ `--secure-vm-guest-state-sas` |
+| Temp resource created | None | Managed disk (~10-30 min, Standard_LRS billing) |
+| Source URL format | Internal blob (`*.blob.storage.azure.net`) — requires AzCopy | Disk SAS — requires AzCopy |
+
+The gallery image must have been published with `security_type = TrustedLaunch` (not just `TrustedLaunchSupported`) for the VMGS SAS to be returned. Images without Trusted Launch guest state will produce a `vhd_uri` only; the script outputs `secure_boot_enabled = false` in that case.
 
 ---
 

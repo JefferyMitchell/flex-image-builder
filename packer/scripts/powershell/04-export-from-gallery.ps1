@@ -5,11 +5,22 @@
 #
 # Use this script when images are already published to an Azure Compute Gallery
 # (e.g. by Azure Image Builder or a customer's existing Packer pipeline).
-# For images built with Packer snapshots, use 03-export-image.ps1 instead.
+# For images built from Packer snapshots that are NOT in a gallery, use 03-export-image.ps1.
 #
-# Both the OS VHD and VMGS SAS URIs are required when secure_boot_enabled = true.
-# If the gallery image was not published with security_type = TrustedLaunch,
-# this script will output a VHD URI only and recommend secure_boot_enabled = false.
+# How it works:
+#   1. Creates a temporary managed disk from the gallery image version.
+#   2. Calls az disk grant-access --secure-vm-guest-state-sas to obtain both the
+#      OS disk SAS and the VMGS SAS (for TrustedLaunch images).
+#   3. Copies OS VHD and VMGS to destination blob storage using AzCopy.
+#   4. Deletes the temporary disk (you are billed for it only during this window).
+#   5. Generates read-only SAS tokens for the destination blobs and prints the
+#      terraform variable values ready to paste into terraform.tfvars.
+#
+# Note: az disk grant-access --secure-vm-guest-state-sas is available in az CLI
+# and works for TrustedLaunch managed disks. This is different from the snapshot
+# path (az snapshot grant-access) which does NOT expose a VMGS flag in az CLI.
+# The REST API beginGetAccess endpoint is not available on gallery image versions
+# directly — only on managed disks and snapshots.
 #
 # Usage:
 #   .\04-export-from-gallery.ps1 `
@@ -26,6 +37,8 @@
 # - GallerySubscriptionId and DestSubscriptionId can be the same or different.
 #   Use different values when the gallery and destination storage are in different
 #   Azure subscriptions (e.g. customer image gallery + Citrix managed storage).
+# - A temporary managed disk is created in GalleryResourceGroup and deleted at the
+#   end of the script. Disk billing applies while it exists (~10-30 min).
 # - The destination storage account must already exist with a container named
 #   OutputContainer (default: vhd-output). Create one with:
 #     az storage account create --name <name> --resource-group <rg> --sku Standard_LRS --kind StorageV2
@@ -59,86 +72,113 @@ if (-not $azCopy) {
     $azCopyExe = $azCopy.Source
 }
 
-# Verify gallery image version exists and note its security type
+# ── Verify gallery image version ──────────────────────────────────────────────
 Write-Host "`nVerifying gallery image version..."
 az account set --subscription $GallerySubscriptionId 2>$null
+
+$galleryVersionId = "/subscriptions/$GallerySubscriptionId/resourceGroups/$GalleryResourceGroup/providers/Microsoft.Compute/galleries/$GalleryName/images/$ImageDefinition/versions/$ImageVersion"
+
 $versionJson = az sig image-version show `
     --resource-group $GalleryResourceGroup `
     --gallery-name $GalleryName `
     --gallery-image-definition $ImageDefinition `
     --gallery-image-version $ImageVersion `
-    --query "{state:provisioningState, securityType:securityProfile.uefiSettings.secureBootEnabled, replicationState:replicationStatus.summary[0].state}" `
     -o json 2>$null | ConvertFrom-Json
 
-$secureBootEnabled = $versionJson.securityType
-Write-Host "  Provisioning state : $($versionJson.state)"
-Write-Host "  Secure Boot        : $(if ($secureBootEnabled) { 'Enabled (TrustedLaunch)' } else { 'Not enabled' })"
-
-# ── Grant SAS via REST API ─────────────────────────────────────────────────────
-# The Azure CLI does not expose getSecureVMGuestStateSAS on gallery versions via
-# a named parameter, so we use the Compute REST API directly.
-# !! Use UtcNow — (Get-Date) returns LOCAL time. Appending "Z" would misrepresent
-# !! the timezone, causing SAS expiry to be in the past on non-UTC machines.
-Write-Host "`nObtaining bearer token for REST API..."
-az account set --subscription $GallerySubscriptionId 2>$null
-$azToken = (az account get-access-token --subscription $GallerySubscriptionId --query accessToken -o tsv 2>$null)
-$authHdr = @{ Authorization = "Bearer $azToken"; "Content-Type" = "application/json" }
-
-$galleryVersionId = "/subscriptions/$GallerySubscriptionId/resourceGroups/$GalleryResourceGroup/providers/Microsoft.Compute/galleries/$GalleryName/images/$ImageDefinition/versions/$ImageVersion"
-$baseUrl = "https://management.azure.com$galleryVersionId"
-
-# Revoke any active SAS
-Write-Host "Revoking any active SAS on the gallery image version..."
-try { Invoke-RestMethod -Method POST -Uri "$baseUrl/endGetAccess?api-version=2024-03-02" -Headers $authHdr -Body "{}" | Out-Null } catch {}
-Start-Sleep -Seconds 3
-
-# Grant access with VMGS flag
-Write-Host "Granting read SAS on gallery image version (including VMGS if TrustedLaunch)..."
-$grantResp = Invoke-WebRequest -Method POST -Uri "$baseUrl/beginGetAccess?api-version=2024-03-02" `
-    -Headers $authHdr -Body '{"access":"Read","durationInSeconds":86400,"getSecureVMGuestStateSAS":true}' -UseBasicParsing
-if ($grantResp.StatusCode -ne 202) { Write-Error "beginGetAccess returned $($grantResp.StatusCode)" }
-
-$asyncUrl = ([string[]]($grantResp.Headers["Azure-AsyncOperation"]))[0]
-$sasOut   = $null
-for ($i = 1; $i -le 24; $i++) {
-    $poll = Invoke-RestMethod -Method GET -Uri $asyncUrl -Headers $authHdr
-    if ($poll.status -eq "Succeeded") { $sasOut = $poll.properties.output; break }
-    if ($poll.status -eq "Failed")    { Write-Error "Grant-access operation failed: $($poll | ConvertTo-Json -Depth 4)" }
-    Write-Host "  Waiting for SAS grant ($i/24)..."
-    Start-Sleep -Seconds 5
+if (-not $versionJson -or $versionJson.provisioningState -ne "Succeeded") {
+    Write-Error "Gallery image version not found or not in Succeeded state. Got: $($versionJson.provisioningState)"
 }
-if (-not $sasOut) { Write-Error "Timed out waiting for SAS grant operation" }
+Write-Host "  Provisioning state : $($versionJson.provisioningState)"
 
-# Gallery grant-access returns the OS disk SAS at the top level, not in .accessSAS
-# The response shape depends on whether it's a single-disk or multi-disk image.
-# Try both shapes.
-$sourceSas = if ($sasOut.accessSAS) { $sasOut.accessSAS } elseif ($sasOut.osDiskImage.accessUri) { $sasOut.osDiskImage.accessUri } else { $null }
-$vmgsSas   = $sasOut.securityDataAccessSAS
+# Detect gallery location (temp disk must be in same region)
+$galleryLocation = (az sig show `
+    --resource-group $GalleryResourceGroup `
+    --gallery-name $GalleryName `
+    --query "location" -o tsv 2>$null).Trim()
+Write-Host "  Gallery location   : $galleryLocation"
 
-if (-not $sourceSas) { Write-Error "OS disk SAS not returned. Response: $($sasOut | ConvertTo-Json -Depth 4)" }
+# Detect security type from image definition — required for az disk create
+$securityType = (az sig image-definition show `
+    --resource-group $GalleryResourceGroup `
+    --gallery-name $GalleryName `
+    --gallery-image-definition $ImageDefinition `
+    --query "features[?name=='SecurityType'].value | [0]" -o tsv 2>$null).Trim()
+Write-Host "  Security type      : $(if ($securityType) { $securityType } else { 'Standard (Gen2)' })"
+$isTrustedLaunch = ($securityType -eq "TrustedLaunch" -or $securityType -eq "TrustedLaunchSupported")
+
+# ── Create temporary managed disk from gallery image version ──────────────────
+# az disk create --gallery-image-reference is the correct way to export a gallery
+# image version. For TrustedLaunch images, --security-type TrustedLaunch is required.
+# The temporary disk provides access to the VMGS via:
+#   az disk grant-access --secure-vm-guest-state-sas
+$diskName = "export-temp-$($ImageDefinition.ToLower())-$($ImageVersion.Replace('.', '-'))"
+if ($diskName.Length -gt 80) { $diskName = $diskName.Substring(0, 80) }
+
+Write-Host "`nCreating temporary managed disk from gallery image version..."
+Write-Host "  Disk name: $diskName  (will be deleted after copy)"
+
+if ($isTrustedLaunch) {
+    Write-Host "  Passing --security-type TrustedLaunch (required for TrustedLaunch gallery images)"
+    az disk create `
+        --resource-group $GalleryResourceGroup `
+        --name $diskName `
+        --gallery-image-reference $galleryVersionId `
+        --location $galleryLocation `
+        --sku Standard_LRS `
+        --security-type TrustedLaunch 2>&1 | Select-String -Pattern "provisioningState|error" | Select-Object -First 5
+} else {
+    az disk create `
+        --resource-group $GalleryResourceGroup `
+        --name $diskName `
+        --gallery-image-reference $galleryVersionId `
+        --location $galleryLocation `
+        --sku Standard_LRS 2>&1 | Select-String -Pattern "provisioningState|error" | Select-Object -First 5
+}
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "az disk create failed (exit $LASTEXITCODE)"
+}
+Write-Host "  Disk created."
+
+# ── Grant access (OS SAS + VMGS SAS if TrustedLaunch) ────────────────────────
+Write-Host "`nGranting access to temporary disk..."
+Write-Host "  (az disk grant-access --secure-vm-guest-state-sas returns VMGS for TrustedLaunch disks)"
+$sasJson = az disk grant-access `
+    --resource-group $GalleryResourceGroup `
+    --name $diskName `
+    --duration-in-seconds 86400 `
+    --secure-vm-guest-state-sas `
+    -o json 2>$null
+
+$sasResult = $sasJson | ConvertFrom-Json
+$sourceSas = $sasResult.accessSAS
+$vmgsSas   = $sasResult.securityDataAccessSAS
+
+if (-not $sourceSas) {
+    Write-Error "OS disk SAS not returned by az disk grant-access. Response: $sasJson"
+}
 Write-Host "  OS SAS obtained  (length $($sourceSas.Length))."
 if ($vmgsSas) {
-    Write-Host "  VMGS SAS obtained (length $($vmgsSas.Length)) — TrustedLaunch image confirmed."
+    Write-Host "  VMGS SAS obtained (length $($vmgsSas.Length)) — TrustedLaunch disk confirmed."
 } else {
-    Write-Host "  VMGS SAS not returned — image was not published with security_type = TrustedLaunch."
+    Write-Host "  VMGS SAS not returned — disk does not have VM guest state (not TrustedLaunch)."
     Write-Host "  Proceeding with OS disk only. Set secure_boot_enabled = false in Terraform."
 }
 
 # ── Destination setup ──────────────────────────────────────────────────────────
 az account set --subscription $DestSubscriptionId 2>$null
-$saKey          = (az storage account keys list --account-name $DestStorageAccount --resource-group $DestResourceGroup --query "[0].value" -o tsv 2>$null)
+$saKey           = (az storage account keys list --account-name $DestStorageAccount --resource-group $DestResourceGroup --query "[0].value" -o tsv 2>$null)
 $containerExpiry = [System.DateTime]::UtcNow.AddHours(6).ToString("yyyy-MM-ddTHH:mmZ")
 $destContainerSas = (az storage container generate-sas `
     --account-name $DestStorageAccount --account-key $saKey `
     --name $OutputContainer --permissions rcw --expiry $containerExpiry -o tsv 2>$null)
 
-# Blob name: <ImageDefinition>-<ImageVersion>.vhd (dots replaced with dashes in version)
 $safeName    = "$ImageDefinition-$($ImageVersion.Replace('.', '-'))"
 $osBlobName  = "$safeName.vhd"
 $osDestUrl   = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$osBlobName`?$destContainerSas"
 
 # ── OS disk copy ───────────────────────────────────────────────────────────────
-Write-Host "`nCopying OS disk from gallery to blob storage (~10-30 minutes)..."
+Write-Host "`nCopying OS disk from temporary disk to blob storage (~10-30 minutes)..."
 & $azCopyExe copy $sourceSas $osDestUrl --blob-type PageBlob
 if ($LASTEXITCODE -ne 0) { Write-Error "AzCopy (OS disk) failed with exit code $LASTEXITCODE" }
 
@@ -160,12 +200,12 @@ if ($vmgsSas) {
     $vmgsUri = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$vmgsBlobName`?$vmgsBlobSas"
 }
 
-# ── Revoke source SAS ──────────────────────────────────────────────────────────
-Write-Host "`nRevoking SAS on gallery image version..."
+# ── Delete temporary disk ──────────────────────────────────────────────────────
+Write-Host "`nDeleting temporary managed disk..."
 az account set --subscription $GallerySubscriptionId 2>$null
-$azToken = (az account get-access-token --subscription $GallerySubscriptionId --query accessToken -o tsv 2>$null)
-$authHdr = @{ Authorization = "Bearer $azToken"; "Content-Type" = "application/json" }
-try { Invoke-RestMethod -Method POST -Uri "$baseUrl/endGetAccess?api-version=2024-03-02" -Headers $authHdr -Body "{}" | Out-Null } catch {}
+az disk revoke-access --resource-group $GalleryResourceGroup --name $diskName 2>$null
+az disk delete --resource-group $GalleryResourceGroup --name $diskName --yes 2>$null
+Write-Host "  Temporary disk deleted."
 
 # ── Output blob SAS for OS VHD ────────────────────────────────────────────────
 az account set --subscription $DestSubscriptionId 2>$null
@@ -188,7 +228,7 @@ if ($vmgsUri) {
     Write-Host "  vtpm_enabled        = true"
 } else {
     Write-Host ""
-    Write-Host "  # guest_disk_uri not available — image was not published with security_type = TrustedLaunch."
+    Write-Host "  # guest_disk_uri not available — image does not have VM guest state."
     Write-Host "  secure_boot_enabled = false"
     Write-Host "  vtpm_enabled        = false"
 }
