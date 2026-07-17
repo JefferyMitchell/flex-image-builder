@@ -113,6 +113,20 @@ The SAS token must grant read (`sp=r`) over HTTPS (`spr=https`). The `03-export-
 
 SAS tokens have an expiry. The script defaults to 7 days (`-SasDays 7`). If you need to re-apply Terraform after the SAS expires, re-run the export script with `-SasDays` set to however many days you need — it will skip the AzCopy transfer (the VHD blob already exists) and generate a fresh SAS token.
 
+### SAS expiry must be calculated in UTC, not local time
+
+Azure SAS tokens are validated against UTC. When PowerShell generates an expiry with `(Get-Date).AddHours(N).ToString("yyyy-MM-ddTHH:mmZ")`, it uses **local time** but appends `Z` — telling Azure the value is UTC when it is not.
+
+**What happens:** If your machine is in a timezone behind UTC (e.g. UTC-5), `(Get-Date)` returns local time that is 5 hours behind UTC. Adding 2 hours gives a time that is still 3 hours in the past from Azure's perspective. Azure rejects the SAS with:
+
+```
+AuthenticationFailed: Signed expiry time [...] must be after signed start time [...]
+```
+
+AzCopy exits with an authentication error on the destination PUT — the source SAS is fine, only the destination container SAS fails.
+
+**The fix:** Always use `[System.DateTime]::UtcNow` instead of `Get-Date` for SAS expiry calculations. The `03-export-image.ps1` script uses `UtcNow` consistently. This is the only correct approach on Windows machines that are not running in the UTC timezone.
+
 ### OS requirements per catalog type
 
 Not all Windows versions work with all catalog types:
@@ -521,6 +535,54 @@ terraform apply
 ```
 
 Manually delete the stuck catalog from Citrix Cloud > Platform Flex > Catalogs in the UI.
+
+---
+
+## Trusted Launch → `terraform destroy` blocked by provider validation
+
+**Symptom:** After setting `guest_disk_uri` in `main.tf`, `terraform destroy` fails with:
+
+```
+Error: Error validating Template Image configuration
+Guest Disk URI is only applicable when Secure Boot is enabled
+```
+
+This happens even when the `guest_disk_uri` variable value is `null` in `terraform.tfvars`.
+
+**Why it happens:** The citrix/citrix provider's `ValidateResourceConfig` hook runs against the HCL configuration on every plan/apply/destroy cycle, not just on apply. When `guest_disk_uri = var.guest_disk_uri` is present as an attribute in `main.tf`, the provider evaluates it even if the resolved value is null. This appears to be a provider validation bug — a null value should not trigger the "URI is only applicable when..." check.
+
+**Fix for destroy:** Temporarily remove the `guest_disk_uri = var.guest_disk_uri` line from `main.tf`, run the destroy, then restore it before the next apply.
+
+```hcl
+# Temporarily remove this line from main.tf before terraform destroy:
+guest_disk_uri = var.guest_disk_uri
+```
+
+This is the **only workaround** — passing `-var "guest_disk_uri=null"` on the command line does not work because Terraform passes the literal string `"null"` rather than HCL null to the provider.
+
+---
+
+## Exporting from Azure Compute Gallery (customer-provided images)
+
+If images are already published to an Azure Compute Gallery (via Azure Image Builder, a customer's Packer pipeline, or any other build process), use `packer/scripts/powershell/04-export-from-gallery.ps1` instead of the snapshot-based `03-export-image.ps1`.
+
+The gallery export script uses the same REST API pattern (`getSecureVMGuestStateSAS`) to capture both the OS VHD and VMGS blob, then AzCopies both to a destination storage account and outputs the `vhd_uri` and `guest_disk_uri` SAS URIs for Terraform.
+
+```powershell
+.\packer\scripts\powershell\04-export-from-gallery.ps1 `
+    -GallerySubscriptionId <gallery-subscription-id> `
+    -GalleryResourceGroup  <gallery-rg> `
+    -GalleryName           <gallery-name> `
+    -ImageDefinition       <image-definition-name> `
+    -ImageVersion          1.0.0 `
+    -DestStorageAccount    <dest-storage-account> `
+    -DestResourceGroup     <dest-rg> `
+    -DestSubscriptionId    <dest-subscription-id>
+```
+
+`GallerySubscriptionId` and `DestSubscriptionId` can be different — this is the typical customer scenario where the gallery and the Citrix-facing storage are in different Azure subscriptions.
+
+The gallery image must have been published with `security_type = TrustedLaunch` for the VMGS SAS to be returned. Images without Trusted Launch will produce a `vhd_uri` only; the script outputs `secure_boot_enabled = false` in that case.
 
 ---
 
