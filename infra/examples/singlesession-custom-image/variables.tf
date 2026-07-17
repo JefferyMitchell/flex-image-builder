@@ -9,7 +9,13 @@ variable "image_name" {
 
 variable "vhd_uri" {
   type        = string
-  description = "Azure Blob URI of the exported VHD. Output of 03-export-image script."
+  description = "Azure Blob SAS URI of the exported OS disk VHD. Output of 03-export-image.ps1."
+}
+
+variable "guest_disk_uri" {
+  type        = string
+  description = "Azure Blob SAS URI of the VM Guest State (VMGS) disk. Required when secure_boot_enabled = true. Output of 03-export-image.ps1 when built with security_type = TrustedLaunch."
+  default     = null
 }
 
 variable "os_platform" {
@@ -20,6 +26,16 @@ variable "os_platform" {
 variable "machine_generation" {
   type    = string
   default = "V2"
+}
+
+variable "secure_boot_enabled" {
+  type    = bool
+  default = true
+}
+
+variable "vtpm_enabled" {
+  type    = bool
+  default = true
 }
 
 variable "image_notes" {

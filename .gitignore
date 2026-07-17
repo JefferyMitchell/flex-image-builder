@@ -1,5 +1,6 @@
-# Packer variable files (contain secrets)
+# Packer variable files (contain secrets — client_secret, storage SAS tokens)
 *.pkrvars.hcl
+packer/variables/*.json
 
 # citrix-packer-tools (cloned locally by build script, not part of this repo)
 citrix-packer-tools/
