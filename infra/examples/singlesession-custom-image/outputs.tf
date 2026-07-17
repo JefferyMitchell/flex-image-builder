@@ -1,6 +1,6 @@
 output "template_image_id" {
   description = "ID of the registered custom image in the Citrix library."
-  value       = citrix_quickdeploy_template_image.this.id
+  value       = data.citrix_quickdeploy_template_image.this.id
 }
 
 output "catalog_id" {
