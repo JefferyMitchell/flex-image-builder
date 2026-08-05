@@ -1,6 +1,10 @@
 # 01-upload-installers.ps1
-# Uploads VDA installer and Citrix Optimizer to Azure Blob Storage,
-# then prints SAS URLs to paste into your .pkrvars.hcl file.
+# Uploads VDA installer and Citrix Optimizer to Azure Blob Storage.
+# Prints plain blob URLs (no SAS) to paste into your vars file.
+#
+# Authentication: uses your active az login session (--auth-mode login).
+# No account keys or SAS tokens are generated — the Packer build VM downloads
+# installers at runtime using its managed identity (see 00-setup-azure.ps1).
 #
 # Usage:
 #   .\01-upload-installers.ps1 `
@@ -12,9 +16,7 @@ param(
     [Parameter(Mandatory)] [string]$StorageAccount,
     [Parameter(Mandatory)] [string]$VdaPath,
     [Parameter(Mandatory)] [string]$OptimizerPath,
-    [string]$ResourceGroup = "rg-flex-packer-build",
-    [string]$Container     = "installers",
-    [int]$SasHours         = 4
+    [string]$Container = "installers"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,37 +24,25 @@ $ErrorActionPreference = "Stop"
 if (-not (Test-Path $VdaPath))       { Write-Error "VDA installer not found: $VdaPath" }
 if (-not (Test-Path $OptimizerPath)) { Write-Error "Citrix Optimizer not found: $OptimizerPath" }
 
-$saKey  = (az storage account keys list --account-name $StorageAccount --resource-group $ResourceGroup --query "[0].value" -o tsv)
-$expiry = (Get-Date).AddHours($SasHours).ToUniversalTime().ToString("yyyy-MM-ddTHH:mmZ")
-
 Write-Host "`nUploading VDA installer..."
 az storage blob upload `
-    --account-name $StorageAccount --account-key $saKey `
+    --account-name $StorageAccount --auth-mode login `
     --container-name $Container `
     --file $VdaPath --name "VDASetup.exe" `
     --overwrite | Out-Null
 
 Write-Host "Uploading Citrix Optimizer..."
 az storage blob upload `
-    --account-name $StorageAccount --account-key $saKey `
+    --account-name $StorageAccount --auth-mode login `
     --container-name $Container `
     --file $OptimizerPath --name "CitrixOptimizer.zip" `
     --overwrite | Out-Null
 
-Write-Host "Generating SAS URLs (valid $SasHours hours)..."
-$vdaSas = (az storage blob generate-sas `
-    --account-name $StorageAccount --account-key $saKey `
-    --container-name $Container --name "VDASetup.exe" `
-    --permissions r --expiry $expiry --full-uri -o tsv)
+$vdaUrl = "https://$StorageAccount.blob.core.windows.net/$Container/VDASetup.exe"
+$optUrl = "https://$StorageAccount.blob.core.windows.net/$Container/CitrixOptimizer.zip"
 
-$optSas = (az storage blob generate-sas `
-    --account-name $StorageAccount --account-key $saKey `
-    --container-name $Container --name "CitrixOptimizer.zip" `
-    --permissions r --expiry $expiry --full-uri -o tsv)
-
-Write-Host "`n--- Paste these into your .pkrvars.hcl file ---"
-Write-Host "vda_location       = `"$vdaSas`""
-Write-Host "optimizer_location = `"$optSas`""
+Write-Host "`n--- Paste these into your vars file ---"
+Write-Host "vda_blob_url       = `"$vdaUrl`""
+Write-Host "optimizer_blob_url = `"$optUrl`""
 Write-Host ""
-Write-Host "SAS URLs expire at $expiry UTC — start your Packer build before then."
-Write-Host "Re-run this script to generate fresh URLs if needed."
+Write-Host "No expiry — the Packer build VM authenticates via managed identity at runtime."

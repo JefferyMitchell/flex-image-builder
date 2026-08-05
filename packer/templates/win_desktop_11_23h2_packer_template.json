@@ -10,8 +10,11 @@
     "image_resource_group": "",
     "optimizer_template": "",
 
-    "vda_location": "",
-    "optimizer_location": "",
+    "managed_identity_id": "",
+    "vda_blob_url": "",
+    "optimizer_blob_url": "",
+    "vda_location": "C:\\Windows\\Temp\\VDASetup.exe",
+    "optimizer_location": "C:\\Windows\\Temp\\CitrixOptimizer.zip",
 
     "image_name": "win_desktop_11_23h2",
     "gallery_image_version": "1.0.0",
@@ -65,6 +68,8 @@
     "winrm_username":  "{{user `username`}}",
     "winrm_password":  "{{user `userpass`}}",
 
+    "user_assigned_managed_identities": ["{{user `managed_identity_id`}}"],
+
     "azure_tags": {
       "Image": "Packer Generated"
     },
@@ -103,6 +108,18 @@
       "type": "file",
       "source":      "..\\scripts\\{{user `script_cleanup`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_cleanup`}}"
+    },
+    {
+      "type": "powershell",
+      "inline": [
+        "$token = (Invoke-RestMethod -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://storage.azure.com/' -Headers @{Metadata='true'}).access_token",
+        "$hdrs = @{ Authorization = \"Bearer $token\"; 'x-ms-version' = '2020-04-08' }",
+        "Write-Host 'Downloading VDA installer via managed identity...'",
+        "Invoke-WebRequest -Uri '{{user `vda_blob_url`}}' -Headers $hdrs -OutFile '{{user `vda_location`}}' -UseBasicParsing",
+        "Write-Host 'Downloading Citrix Optimizer via managed identity...'",
+        "Invoke-WebRequest -Uri '{{user `optimizer_blob_url`}}' -Headers $hdrs -OutFile '{{user `optimizer_location`}}' -UseBasicParsing",
+        "Write-Host 'Downloads complete.'"
+      ]
     },
     {
       "type": "powershell",
