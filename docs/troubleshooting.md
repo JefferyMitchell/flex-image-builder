@@ -131,3 +131,80 @@ For MultiSession, there is no workaround in v1.0.35 — upgrade to >= 1.0.36.
 ```powershell
 terraform init -upgrade
 ```
+
+---
+
+## A build fails or hangs: getting into the build VM
+
+**Background:** each build VM gets a one-time WinRM password. Packer generates it, never writes it anywhere and filters it from its logs, so there's no standing credential to leak. That also means there's no password for *you*. When a build fails or hangs, use the steps below instead. Each one leaves the build VM's image untouched until step 3.
+
+### 1. Keep the VM
+
+- **A failing build** deletes its VM by default. Re-run it with `-KeepOnError` (Packer's `-on-error=abort`), and the VM and its resources stay in the build resource group.
+- **A hung build** (for example, stuck at `Waiting for WinRM` or at a provisioner) still has its VM. **Don't press Ctrl-C yet**, because that starts the cleanup.
+
+The build VM is named `pkrvm<random>`. Its NIC, public IP, network security group, Key Vault and OS disk are named `pkrni…`, `pkrip…`, `pkrsg…`, `pkrkv…` and `pkros…`.
+
+```powershell
+az vm list -g rg-flex-packer-build --query "[?starts_with(name,'pkrvm')].name" -o tsv
+```
+
+### 2. Look inside without logging in (Run Command)
+
+Azure Run Command executes a script through the VM agent as SYSTEM. It needs no password and no open port, only Contributor (or Virtual Machine Contributor) on the resource group.
+
+```powershell
+$vm = "<pkrvm name>"
+az vm run-command invoke -g rg-flex-packer-build -n $vm --command-id RunPowerShellScript --scripts '
+  "== C:\setup";        Get-ChildItem C:\setup -ErrorAction SilentlyContinue | Select Name,Length,LastWriteTime
+  "== VDA installer log"; Get-ChildItem "C:\Users\*\AppData\Local\Temp\Citrix\XenDesktop Installer\*.log" -ErrorAction SilentlyContinue |
+                          ForEach-Object { $_.FullName; Get-Content $_.FullName -Tail 40 }
+  "== Pending reboot";    Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"
+  "== Busy processes";    Get-Process | Sort-Object CPU -Descending | Select -First 10 Name,CPU,StartTime
+  "== WinRM listeners";   winrm enumerate winrm/config/listener
+  "== Recent errors";     Get-WinEvent -FilterHashtable @{LogName="Application","System"; Level=1,2} -MaxEvents 20 -ErrorAction SilentlyContinue |
+                          Select TimeCreated,ProviderName,Message
+'
+```
+
+Run Command answers most "why is it stuck" questions:
+
+- an installer waiting on a reboot;
+- a looping update;
+- a WinRM listener that never came up;
+- a failed provisioner script.
+
+### 3. Interactive access (break-glass)
+
+If you need a desktop session:
+
+1. **Set a known password on that one VM.** This uses the VMAccess extension:
+   ```powershell
+   az vm user update -g rg-flex-packer-build -n $vm -u packer -p "<a new strong password>"
+   ```
+2. **Open RDP from your address only,** on the build VM's network security group (`pkrsg…`). WinRM is already limited to your address:
+   ```powershell
+   $nsg = az network nsg list -g rg-flex-packer-build --query "[?starts_with(name,'pkrsg')].name" -o tsv
+   az network nsg rule create -g rg-flex-packer-build --nsg-name $nsg -n allow-rdp-debug `
+       --priority 200 --access Allow --protocol Tcp --direction Inbound `
+       --source-address-prefixes "<your egress IP>/32" --destination-port-ranges 3389
+   ```
+3. **Connect.** RDP to the `pkrip…` public IP as `packer`, using Microsoft Remote Desktop / Windows App on macOS.
+
+**Rules for break-glass access:**
+
+- Resetting the password breaks Packer's own WinRM session. Treat that build as dead.
+- **Never publish an image from a VM you've logged into or changed.** VMAccess installs an extension, and your session leaves profile data, logs and possibly credentials on the disk. Fix the cause, then rebuild from scratch.
+
+### 4. Clean up
+
+Delete what the failed build left behind. Run it again if a resource is still in use; the VM goes first, then the NIC, then the rest.
+
+```powershell
+az vm delete -g rg-flex-packer-build -n $vm --yes
+az resource list -g rg-flex-packer-build --query "[?starts_with(name,'pkr')].id" -o tsv |
+    ForEach-Object { az resource delete --ids $_ }
+```
+
+A soft-deleted `pkrkv…` Key Vault can be purged with `az keyvault purge -n <name>` if your policy allows it.
+
