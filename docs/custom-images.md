@@ -291,7 +291,28 @@ The error without this is: *"Could not retrieve the list of available versions f
 
 ### Step 1 — Azure Setup
 
-Run once per environment. Creates the resource group, storage account, service principal, managed identity, and the Azure Compute Gallery with one Trusted Launch image definition per template (Gen2, `SecurityType=TrustedLaunch`, Specialized). Packer publishes into these but does not create them.
+Run once per environment. Creates:
+
+- the resource group, storage account and containers;
+- **Storage Blob Data Contributor for you** on that storage account, because uploads and exports use your sign-in, not account keys;
+- the build VM's managed identity;
+- the Azure Compute Gallery, with one Trusted Launch image definition per template (Gen2, `SecurityType=TrustedLaunch`, Specialized). Packer publishes into these but doesn't create them.
+
+**How Packer signs in (`-AuthMode`):**
+
+| Mode | Packer runs as | Secret | Use for |
+|---|---|---|---|
+| `Cli` (default) | your `az login` session | none | interactive builds |
+| `ServicePrincipal` | a service principal with Contributor on the build resource group | a client secret, shown once | unattended builds where federation isn't available |
+
+For CI, prefer workload identity federation (OIDC), which needs no stored secret. `ServicePrincipal` needs rights to register applications in Entra ID.
+
+In both modes, Packer builds **inside** the build resource group (`build_resource_group_name`). It never creates a temporary resource group, so resource-group-scoped rights are enough.
+
+**Roles:**
+
+- **To run setup:** Owner, or Contributor + User Access Administrator, on the subscription. Setup creates role assignments.
+- **For builds:** Contributor on the build resource group, plus Storage Blob Data Contributor on its storage account.
 
 ```powershell
 .\packer\scripts\powershell\00-setup-azure.ps1 `
@@ -300,7 +321,7 @@ Run once per environment. Creates the resource group, storage account, service p
     -Prefix flex-packer
 ```
 
-The script outputs SP credentials and resource names to paste into your Packer variables file. Keep the output — the client secret is shown once.
+The script prints the values to paste into your Packer variables file. In `ServicePrincipal` mode that includes the client secret. It's shown once, so put it in a secret manager, not in a file you might commit.
 
 ---
 
@@ -335,7 +356,9 @@ cp packer/variables/win_server_2025.json.example packer/variables/win_server_202
 
 Leave `vda_location` and `optimizer_location` out: they are the download paths *on the build VM* and the template defaults are correct.
 
-The filled-in file is git-ignored — never commit it (it contains the service principal secret).
+Leave `userpass` out. Packer generates a one-time WinRM password for each build VM and filters it from its logs, so there's no password to store.
+
+The filled-in file is git-ignored, but never commit it anyway: in `ServicePrincipal` mode it holds the client secret.
 
 #### Gen2 SKU selection
 

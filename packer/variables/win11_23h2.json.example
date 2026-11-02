@@ -1,8 +1,5 @@
 {
-  "client_id":              "<service principal appId, from 00-setup-azure.ps1>",
-  "client_secret":          "<service principal secret, from 00-setup-azure.ps1; never commit>",
-  "client_object_id":       "<service principal object ID, from 00-setup-azure.ps1>",
-  "client_tenant_id":       "<Entra tenant ID>",
+  "use_azure_cli_auth":     "true",
   "client_subscription_id": "<subscription that holds the build resource group and gallery>",
 
   "image_resource_group":   "rg-flex-packer-build",
@@ -17,7 +14,6 @@
   "optimizer_blob_url":     "https://<storage-account>.blob.core.windows.net/installers/CitrixOptimizer.zip",
   "optimizer_template":     "Citrix_Windows_11_2009.xml",
 
-  "userpass":               "<temporary WinRM password for the build VM>",
   "winrm_insecure":         "true",
 
   "install_browser_chrome_flag":  "true",
