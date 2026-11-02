@@ -114,7 +114,14 @@ Citrix Platform Flex accesses your blob storage directly from Citrix's backend i
 
 The SAS token must grant read (`sp=r`) over HTTPS (`spr=https`). The `03-export-image.ps1` script generates this automatically and outputs the full SAS URI to paste into Terraform.
 
-SAS tokens have an expiry. The script defaults to 7 days (`-SasDays 7`). If you need to re-apply Terraform after the SAS expires, re-run the export script with `-SasDays` set to however many days you need — it will skip the AzCopy transfer (the VHD blob already exists) and generate a fresh SAS token.
+**How the SAS is made:** the export scripts generate a **user-delegation SAS**. It's signed with your Entra sign-in, not the storage account key, and the scripts never read account keys.
+
+- It lasts at most 7 days (`-SasDays`, default 7).
+- You can revoke it early with `az storage account revoke-delegation-keys`. An account-key SAS can only be revoked by rotating the key.
+- AzCopy writes the blobs using your `az` sign-in (`AZCOPY_AUTO_LOGIN_TYPE=AZCLI`), so no write SAS exists either.
+- You need **Storage Blob Data Contributor** on the storage account. `00-setup-azure.ps1` assigns it.
+
+If the SAS expires before you've imported the image, re-run the export script to get a fresh one.
 
 ### SAS expiry must be calculated in UTC, not local time
 
