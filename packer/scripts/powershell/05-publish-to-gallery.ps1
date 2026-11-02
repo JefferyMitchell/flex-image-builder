@@ -1,4 +1,9 @@
 # 05-publish-to-gallery.ps1
+#
+# LEGACY: only for a managed image built elsewhere (managed images cannot be Trusted
+# Launch). The templates in packer/templates/ publish straight into the gallery, so a
+# normal build goes 02-build.ps1 -> 04-export-from-gallery.ps1 and skips this script.
+#
 # Publishes a Packer-built managed image to an Azure Compute Gallery so that
 # 04-export-from-gallery.ps1 can export the OS VHD and VMGS SAS URIs.
 #

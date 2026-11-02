@@ -39,14 +39,15 @@ Step 1 — Azure setup          Step 2 — Stage installers     Step 3 — Packe
 Create RG, storage            Upload VDA + Optimizer        Clone citrix-packer-tools
 account, service              Print blob URLs (build VM     Run packer build
 principal, managed identity   reads via managed identity)   ~45 min
-                                                            Output: OS disk SNAPSHOT
-                                                                    Managed Image
+                                                            Output: gallery image
+                                                            version (specialized,
+                                                            Trusted Launch)
 
 Step 4 — Export VHD           Step 5 — Register + deploy
 ────────────────────          ──────────────────────────
-03-export-image        →      terraform apply
-AzCopy snapshot to            citrix_quickdeploy_template_image
-VHD blob (not image)          registers image in Flex library
+04-export-from-gallery →      terraform apply
+Temp disk; AzCopy OS VHD      citrix_quickdeploy_template_image
++ VMGS to a blob              registers image in Flex library
 Generate blob SAS URI         citrix_quickdeploy_catalog
 (required by Citrix)          provisions machines from it
 ```
@@ -74,6 +75,8 @@ In the Packer template, Gen2 is selected by choosing a `-g2` marketplace SKU. Th
 That single SKU choice determines that the entire chain — build VM, OS disk, snapshot, managed image — is all Gen2.
 
 ### Export the snapshot, not the managed image
+
+> **Current templates:** the templates publish straight into a *specialized* gallery image version (`"specialized": true`), so Packer never calls Generalize and no managed image is created. The gallery version holds the same pre-generalization disk the snapshot below describes, and `04-export-from-gallery.ps1` exports it (OS VHD + VMGS). The snapshot path (`03-export-image.ps1`) remains for builds that produce snapshots.
 
 This is the most critical and non-obvious point in the pipeline.
 
@@ -288,7 +291,7 @@ The error without this is: *"Could not retrieve the list of available versions f
 
 ### Step 1 — Azure Setup
 
-Run once per environment. Creates the resource group, storage account, and service principal.
+Run once per environment. Creates the resource group, storage account, service principal, managed identity, and the Azure Compute Gallery with one Trusted Launch image definition per template (Gen2, `SecurityType=TrustedLaunch`, Specialized). Packer publishes into these but does not create them.
 
 ```powershell
 .\packer\scripts\powershell\00-setup-azure.ps1 `
@@ -368,14 +371,14 @@ Using the non-g2 SKU (`2025-datacenter`) builds a Gen1 image. The resulting cata
 
 Build time is approximately 40–50 minutes. The build script clones `citrix-packer-tools` automatically if not present.
 
-At completion Packer outputs:
+At completion Packer outputs the gallery image version it published:
 
 ```
-ManagedImageName: win_server_2025_dc_202607160709
-ManagedImageOSDiskSnapshotName: win_server_2025_dc_202607160709
+ManagedImageSharedImageGalleryId: /subscriptions/<sub>/resourceGroups/rg-flex-packer-build/providers/Microsoft.Compute/galleries/FlexPackerGallery/images/WinServer2025DC/versions/1.0.0
+SharedImageGalleryImageVersion: 1.0.0
 ```
 
-Note both names — they are identical. You will pass the snapshot name to `03-export-image.ps1`.
+Bump `gallery_image_version` in your vars file for every build: a published version cannot be overwritten.
 
 #### What Packer does internally
 
@@ -384,16 +387,30 @@ Understanding the build sequence prevents the "wrong VHD" mistake:
 1. Creates a temporary resource group and deploys a VM from the marketplace image
 2. Runs all provisioners (VDA install, restart, VDA install phase 2, Ngen, Optimizer, Chrome, cleanup)
 3. **Powers off the VM**
-4. **Snapshots the OS disk** — this snapshot is the correct source for Citrix MCS
-5. Calls Azure's Generalize API on the VM (marks the OS as sysprepped)
-6. Captures a Managed Image from the generalized disk
-7. Deletes the temporary resource group
-
-The snapshot (step 4) is taken from a running, non-sysprepped disk. The managed image (step 6) is taken after generalization. Citrix needs the non-sysprepped disk — always use the snapshot.
+4. **Publishes the OS disk (and its VM guest state) straight into the gallery image version.** With `"specialized": true` Packer skips the Generalize call, so the disk stays non-sysprepped — the state Citrix MCS needs
+5. Deletes the temporary resource group
 
 ---
 
-### Step 5 — Export Snapshot VHD
+### Step 5 — Export the Gallery Version to VHD
+
+```powershell
+.\packer\scripts\powershell\04-export-from-gallery.ps1 `
+    -GallerySubscriptionId "your-azure-subscription-id" `
+    -GalleryResourceGroup  rg-flex-packer-build `
+    -GalleryName           FlexPackerGallery `
+    -ImageDefinition       WinServer2025DC `
+    -ImageVersion          1.0.0 `
+    -DestStorageAccount    flexpackerbuild `
+    -DestResourceGroup     rg-flex-packer-build `
+    -DestSubscriptionId    "your-azure-subscription-id"
+```
+
+The script creates a temporary managed disk from the gallery version, copies the OS VHD and the VMGS blob to `vhd-output` with AzCopy, deletes the temporary disk, and prints `vhd_uri` and `guest_disk_uri` with read SAS tokens. See [Exporting from Azure Compute Gallery](#exporting-from-azure-compute-gallery-customer-provided-images) for how it works.
+
+#### Snapshot-based builds (`03-export-image.ps1`)
+
+If you have a Packer OS-disk snapshot instead (a managed-image build), export it with:
 
 ```powershell
 .\packer\scripts\powershell\03-export-image.ps1 `
@@ -487,7 +504,7 @@ Catalog creation takes 35–40 minutes. It provisions the Azure VMs, domain-join
 
 When you build a new version:
 
-1. Run steps 4–5 to produce a new snapshot and VHD URI
+1. Bump `gallery_image_version`, then run steps 4–5 to produce a new gallery version and VHD URI
 2. Update `vhd_uri` in `terraform.tfvars` with the new SAS URI
 3. Update `image_name` if you want a versioned name in the Citrix library
 4. `terraform apply`

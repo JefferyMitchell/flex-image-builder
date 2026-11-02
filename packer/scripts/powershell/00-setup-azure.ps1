@@ -5,6 +5,8 @@
 #   - Service principal with Contributor on the resource group (Packer VM/gallery operations)
 #   - User-assigned managed identity attached to the Packer build VM at runtime
 #     so it can download installers from blob storage without SAS tokens or account keys
+#   - Azure Compute Gallery + one Trusted Launch image definition per template
+#     (Packer publishes into these but does not create them)
 #
 # Why managed identity instead of SAS?
 #   SAS tokens embed credentials in URLs, expire on a fixed schedule, and cause
@@ -21,7 +23,9 @@ param(
     [string]$Location  = "eastus",
     [string]$Prefix    = "flex-packer",
     [string]$SpName    = "sp-$Prefix-build",
-    [string]$MsiName   = "id-$Prefix-build"
+    [string]$MsiName   = "id-$Prefix-build",
+    [string]$GalleryName = "FlexPackerGallery",
+    [string]$Publisher   = "FlexImageBuilder"
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,6 +81,24 @@ az role assignment create `
     --role "Storage Blob Data Reader" `
     --scope $containerScope | Out-Null
 
+# Azure Compute Gallery — the templates publish straight into it.
+# Definitions: Gen2 + SecurityType=TrustedLaunch (required for the VMGS export) and
+# Specialized, because the templates capture without generalizing ("specialized": true):
+# Citrix MCS needs the pre-generalization disk.
+Write-Host "`nCreating Azure Compute Gallery: $GalleryName..."
+az sig create --resource-group $rg --gallery-name $GalleryName --location $Location | Out-Null
+foreach ($def in @("WinServer2025DC", "WinDesktop11Enterprise23H2")) {
+    Write-Host "Creating image definition: $def (Gen2, Trusted Launch, Specialized)..."
+    az sig image-definition create `
+        --resource-group $rg `
+        --gallery-name $GalleryName `
+        --gallery-image-definition $def `
+        --publisher $Publisher --offer FlexImages --sku $def `
+        --os-type Windows --os-state Specialized `
+        --hyper-v-generation V2 `
+        --features SecurityType=TrustedLaunch | Out-Null
+}
+
 Write-Host "`n--- Copy these values into your vars file ---"
 Write-Host "client_id              = `"$($sp.appId)`""
 Write-Host "client_secret          = `"$($sp.password)`""
@@ -85,6 +107,8 @@ Write-Host "client_tenant_id       = `"$($sp.tenant)`""
 Write-Host "client_subscription_id = `"$SubscriptionId`""
 Write-Host "image_resource_group   = `"$rg`""
 Write-Host "managed_identity_id    = `"$($msi.id)`""
+Write-Host "gallery_name           = `"$GalleryName`""
+Write-Host "location               = `"$Location`""
 Write-Host ""
 Write-Host "vda_blob_url       = `"https://$sa.blob.core.windows.net/installers/VDASetup.exe`""
 Write-Host "optimizer_blob_url = `"https://$sa.blob.core.windows.net/installers/CitrixOptimizer.zip`""
