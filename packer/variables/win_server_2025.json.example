@@ -15,6 +15,7 @@
   "optimizer_template":     "Citrix_Windows_Server_2025.xml",
 
   "winrm_insecure":         "true",
+  "allowed_inbound_ip":     "<your egress IP>/32",
 
   "install_browser_chrome_flag":  "true",
   "install_browser_firefox_flag": "false"
