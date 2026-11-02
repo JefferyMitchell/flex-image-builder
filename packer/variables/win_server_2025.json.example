@@ -8,6 +8,9 @@
   "image_resource_group":   "rg-flex-packer-build",
   "image_name":             "win_server_2025_dc",
   "gallery_image_version":  "1.0.0",
+  "gallery_name":           "FlexPackerGallery",
+  "gallery_image_name":     "WinServer2025DC",
+  "location":               "eastus",
 
   "managed_identity_id":    "<managed_identity_id, from 00-setup-azure.ps1>",
   "vda_blob_url":           "https://<storage-account>.blob.core.windows.net/installers/VDASetup.exe",
