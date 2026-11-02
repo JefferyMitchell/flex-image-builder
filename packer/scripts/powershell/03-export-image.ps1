@@ -35,7 +35,7 @@ $ErrorActionPreference = "Stop"
 $azCopy = Get-Command azcopy -ErrorAction SilentlyContinue
 if (-not $azCopy) {
     $azCopy = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter azcopy.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $azCopy) { Write-Error "azcopy not found. Install with: winget install Microsoft.Azure.AzCopy.10" }
+    if (-not $azCopy) { Write-Error "azcopy not found on PATH. Install with: winget install Microsoft.Azure.AzCopy.10 (Windows) or brew install azcopy (macOS)" }
     $azCopyExe = $azCopy.FullName
 } else {
     $azCopyExe = $azCopy.Source
@@ -121,7 +121,7 @@ if ($vmgsSas) {
     & $azCopyExe copy $vmgsSas $vmgsDestUrl --blob-type PageBlob
     if ($LASTEXITCODE -ne 0) { Write-Error "AzCopy (VMGS) failed with exit code $LASTEXITCODE" }
 
-    $blobExpiry = (Get-Date).AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
+    $blobExpiry = [System.DateTime]::UtcNow.AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
     $vmgsBlobSas = (az storage blob generate-sas `
         --account-name $StorageAccount --account-key $saKey `
         --container-name $OutputContainer --name $vmgsBlobName `
@@ -134,7 +134,7 @@ try { Invoke-RestMethod -Method POST -Uri "$baseUrl/endGetAccess?api-version=202
 Start-Sleep -Seconds 2
 
 # ── Output blob SAS for the OS VHD ───────────────────────────────────────────
-$blobExpiry = (Get-Date).AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
+$blobExpiry = [System.DateTime]::UtcNow.AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
 $osBlobSas  = (az storage blob generate-sas `
     --account-name $StorageAccount --account-key $saKey `
     --container-name $OutputContainer --name $osBlobName `

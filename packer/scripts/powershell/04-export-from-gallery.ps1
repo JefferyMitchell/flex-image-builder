@@ -66,7 +66,7 @@ $ErrorActionPreference = "Stop"
 $azCopy = Get-Command azcopy -ErrorAction SilentlyContinue
 if (-not $azCopy) {
     $azCopy = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter azcopy.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $azCopy) { Write-Error "azcopy not found. Install with: winget install Microsoft.Azure.AzCopy.10" }
+    if (-not $azCopy) { Write-Error "azcopy not found on PATH. Install with: winget install Microsoft.Azure.AzCopy.10 (Windows) or brew install azcopy (macOS)" }
     $azCopyExe = $azCopy.FullName
 } else {
     $azCopyExe = $azCopy.Source

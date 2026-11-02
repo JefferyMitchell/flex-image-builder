@@ -37,8 +37,8 @@ Step 1 — Azure setup          Step 2 — Stage installers     Step 3 — Packe
 ─────────────────────         ──────────────────────────    ──────────────────────
 00-setup-azure         →      01-upload-installers    →     02-build
 Create RG, storage            Upload VDA + Optimizer        Clone citrix-packer-tools
-account, service              Generate SAS URLs             Run packer build
-principal                     (4 hour expiry)               ~45 min
+account, service              Print blob URLs (build VM     Run packer build
+principal, managed identity   reads via managed identity)   ~45 min
                                                             Output: OS disk SNAPSHOT
                                                                     Managed Image
 
@@ -312,19 +312,25 @@ Download the VDA installer and Citrix Optimizer from [Citrix Downloads](https://
     -OptimizerPath C:\Downloads\CitrixOptimizer.zip
 ```
 
-The script generates SAS URLs and writes them into your Packer variables file automatically.
+The script prints plain blob URLs (`vda_blob_url`, `optimizer_blob_url`) to paste into your Packer variables file. There is no SAS and no expiry: the build VM downloads the installers with its user-assigned managed identity (`managed_identity_id`, from Step 1).
 
-> **Gotcha — SAS expiry on installer blobs:** The SAS URLs generated for the VDA installer and Optimizer default to a short expiry. If you don't start the Packer build within that window, Packer will fail when trying to download the VDA installer — it will appear as a generic download error. Re-run `01-upload-installers.ps1` to get fresh SAS URLs before retrying the build.
+> **Note:** `--auth-mode login` uploads need a data-plane role on the storage account for the signed-in user (Storage Blob Data Contributor). Owner or Contributor alone is not enough.
 
 ---
 
 ### Step 3 — Configure Packer Variables
 
-Copy the template and fill in all values:
+Copy the example and fill in all values. The templates are legacy JSON, so the variables file must be JSON too (an HCL `.pkrvars.hcl` file fails with `Error reading variables`):
 
 ```powershell
-copy packer\variables\win_server_2025.json.example packer\variables\win_server_2025.json
+Copy-Item packer\variables\win_server_2025.json.example packer\variables\win_server_2025.json
 ```
+
+```bash
+cp packer/variables/win_server_2025.json.example packer/variables/win_server_2025.json
+```
+
+Leave `vda_location` and `optimizer_location` out: they are the download paths *on the build VM* and the template defaults are correct.
 
 The filled-in file is git-ignored — never commit it (it contains the service principal secret).
 

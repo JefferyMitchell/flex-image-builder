@@ -86,27 +86,27 @@
     },
     {
       "type": "file",
-      "source":      ".\\{{user `script_installvda`}}",
+      "source":      "./{{user `script_installvda`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_installvda`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_optimizer`}}",
+      "source":      "../scripts/{{user `script_optimizer`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_optimizer`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_installchrome`}}",
+      "source":      "../scripts/{{user `script_installchrome`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_installchrome`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_installfirefox`}}",
+      "source":      "../scripts/{{user `script_installfirefox`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_installfirefox`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_cleanup`}}",
+      "source":      "../scripts/{{user `script_cleanup`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_cleanup`}}"
     },
     {
