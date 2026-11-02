@@ -73,4 +73,4 @@ try {
     Pop-Location
 }
 
-Write-Host "`nBuild complete. Run 03-export-image.ps1 to get the VHD URI for Terraform."
+Write-Host "`nBuild complete. Run 04-export-from-gallery.ps1 to export the OS VHD (+ VMGS) and get the SAS URIs for Terraform."

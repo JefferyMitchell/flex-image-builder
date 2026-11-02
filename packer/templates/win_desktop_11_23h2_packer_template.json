@@ -18,6 +18,9 @@
 
     "image_name": "win_desktop_11_23h2",
     "gallery_image_version": "1.0.0",
+    "gallery_name": "FlexPackerGallery",
+    "gallery_image_name": "WinDesktop11Enterprise23H2",
+    "location": "East US",
     "location_setup": "c:\\setup",
 
     "install_browser_chrome_flag": "true",
@@ -42,16 +45,14 @@
     "subscription_id": "{{user `client_subscription_id`}}",
     "object_id":       "{{user `client_object_id`}}",
 
-    "managed_image_os_disk_snapshot_name": "{{user `image_name`}}_{{ isotime \"200601020304\" }}",
-    "managed_image_resource_group_name":   "{{user `image_resource_group`}}",
-
     "shared_image_gallery_destination": {
       "subscription":        "{{user `client_subscription_id`}}",
       "resource_group":      "{{user `image_resource_group`}}",
-      "gallery_name":        "FlexPackerGallery",
-      "image_name":          "WinDesktop11Enterprise23H2",
+      "gallery_name":        "{{user `gallery_name`}}",
+      "image_name":          "{{user `gallery_image_name`}}",
       "image_version":       "{{user `gallery_image_version`}}",
-      "replication_regions": ["East US"]
+      "replication_regions": ["{{user `location`}}"],
+      "specialized":         true
     },
 
     "os_type":          "Windows",
@@ -74,7 +75,7 @@
       "Image": "Packer Generated"
     },
 
-    "location": "East US",
+    "location": "{{user `location`}}",
     "vm_size":  "Standard_D2s_v3"
   }],
   "provisioners": [
