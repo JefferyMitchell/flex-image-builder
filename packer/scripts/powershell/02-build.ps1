@@ -56,6 +56,14 @@ if (-not (Test-Path $patchedTemplate)) {
 # so we must run packer from the citrix-packer-tools version directory, with our template file
 $versionDir = Join-Path $packerToolsDir "azure\$VdaVersion"
 
+# Auth: with use_azure_cli_auth (the default) Packer runs as your az CLI sign-in.
+$vars = Get-Content $varsFilePath -Raw | ConvertFrom-Json
+if ("$($vars.use_azure_cli_auth)" -ne "false") {
+    $account = (az account show --query "{user:user.name, sub:name}" -o json 2>$null) | ConvertFrom-Json
+    if (-not $account) { Write-Error "use_azure_cli_auth is on but az is not signed in. Run 'az login' first." }
+    Write-Host "Packer will authenticate as $($account.user) (subscription: $($account.sub))."
+}
+
 Write-Host "`nEnsuring Packer Azure plugin is installed..."
 packer plugins install github.com/hashicorp/azure
 
