@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# DEPRECATED: use the PowerShell scripts in packer/scripts/powershell (run with pwsh 7 on macOS/Linux).
+# These bash scripts predate the Trusted Launch, gallery and managed-identity changes.
 # 03-export-image.sh
 # Exports a Packer-built Managed Image to a VHD blob and prints the URI
 # for use as vhd_uri in citrix_quickdeploy_template_image.

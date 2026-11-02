@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# DEPRECATED: use the PowerShell scripts in packer/scripts/powershell (run with pwsh 7 on macOS/Linux).
+# These bash scripts predate the Trusted Launch, gallery and managed-identity changes.
 # 02-build.sh
 # Clones citrix-packer-tools and runs a Packer build.
 # Usage: ./02-build.sh --vars-file win_server_2025.pkrvars.hcl --os win_server_2025_dc [--vda-version v2507]
