@@ -6,6 +6,7 @@
     "client_object_id": "",
     "client_tenant_id": "",
     "client_subscription_id": "",
+    "use_azure_cli_auth": "true",
 
     "image_resource_group": "",
     "optimizer_template": "",
@@ -44,6 +45,7 @@
     "tenant_id":       "{{user `client_tenant_id`}}",
     "subscription_id": "{{user `client_subscription_id`}}",
     "object_id":       "{{user `client_object_id`}}",
+    "use_azure_cli_auth": "{{user `use_azure_cli_auth`}}",
 
     "shared_image_gallery_destination": {
       "subscription":        "{{user `client_subscription_id`}}",
@@ -75,7 +77,7 @@
       "Image": "Packer Generated"
     },
 
-    "location": "{{user `location`}}",
+    "build_resource_group_name": "{{user `image_resource_group`}}",
     "vm_size":  "Standard_D2s_v3"
   }],
   "provisioners": [
