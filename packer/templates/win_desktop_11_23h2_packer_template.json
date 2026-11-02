@@ -33,6 +33,8 @@
     "script_installfirefox": "install-browser-firefox.ps1",
     "script_cleanup":        "run-cleanup.ps1",
 
+    "allowed_inbound_ip": "",
+
     "username": "packer",
     "userpass": "",
     "winrm_insecure": "true"
@@ -72,6 +74,8 @@
     "winrm_password":  "{{user `userpass`}}",
 
     "user_assigned_managed_identities": ["{{user `managed_identity_id`}}"],
+
+    "allowed_inbound_ip_addresses": ["{{user `allowed_inbound_ip`}}"],
 
     "azure_tags": {
       "Image": "Packer Generated"
