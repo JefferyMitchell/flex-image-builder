@@ -45,7 +45,9 @@
 #     az storage container create --name vhd-output --account-name <name>
 # - AzCopy v10 is required. Install with: winget install Microsoft.Azure.AzCopy.10
 # - The blob names written are: <definition>-<version>.vhd and <definition>-<version>-vmgs.vhd
-# - SAS tokens expire after SasDays (default 14). Re-run to regenerate without re-copying.
+# - SAS tokens are user-delegation SAS (signed with your Entra sign-in, no account key) and
+#   expire after SasDays (default and maximum 7). You need Storage Blob Data Contributor on
+#   the destination account.
 
 param(
     [Parameter(Mandatory)] [string]$GallerySubscriptionId,
@@ -54,10 +56,10 @@ param(
     [Parameter(Mandatory)] [string]$ImageDefinition,
     [Parameter(Mandatory)] [string]$ImageVersion,
     [Parameter(Mandatory)] [string]$DestStorageAccount,
-    [Parameter(Mandatory)] [string]$DestResourceGroup,
+    [string]$DestResourceGroup,   # no longer used (no account-key lookup); kept so existing command lines still work
     [Parameter(Mandatory)] [string]$DestSubscriptionId,
     [string]$OutputContainer = "vhd-output",
-    [int]$SasDays = 14
+    [ValidateRange(1,7)] [int]$SasDays = 7   # user-delegation SAS: 7 days max
 )
 
 $ErrorActionPreference = "Stop"
@@ -167,15 +169,15 @@ if ($vmgsSas) {
 
 # ── Destination setup ──────────────────────────────────────────────────────────
 az account set --subscription $DestSubscriptionId 2>$null
-$saKey           = (az storage account keys list --account-name $DestStorageAccount --resource-group $DestResourceGroup --query "[0].value" -o tsv 2>$null)
-$containerExpiry = [System.DateTime]::UtcNow.AddHours(6).ToString("yyyy-MM-ddTHH:mmZ")
-$destContainerSas = (az storage container generate-sas `
-    --account-name $DestStorageAccount --account-key $saKey `
-    --name $OutputContainer --permissions rcw --expiry $containerExpiry -o tsv 2>$null)
+# Destination writes: AzCopy signs in with your az CLI session (AZCOPY_AUTO_LOGIN_TYPE=AZCLI),
+# so no storage account key or write SAS is needed. The read SAS handed to Citrix is a
+# user-delegation SAS: signed with your Entra sign-in, max 7 days, revocable with
+# `az storage account revoke-delegation-keys`. Needs Storage Blob Data Contributor on the account.
+$env:AZCOPY_AUTO_LOGIN_TYPE = "AZCLI"
 
 $safeName    = "$ImageDefinition-$($ImageVersion.Replace('.', '-'))"
 $osBlobName  = "$safeName.vhd"
-$osDestUrl   = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$osBlobName`?$destContainerSas"
+$osDestUrl   = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$osBlobName"
 
 # ── OS disk copy ───────────────────────────────────────────────────────────────
 Write-Host "`nCopying OS disk from temporary disk to blob storage (~10-30 minutes)..."
@@ -186,7 +188,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "AzCopy (OS disk) failed with exit code $
 $vmgsUri = $null
 if ($vmgsSas) {
     $vmgsBlobName = "$safeName-vmgs.vhd"
-    $vmgsDestUrl  = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$vmgsBlobName`?$destContainerSas"
+    $vmgsDestUrl  = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$vmgsBlobName"
 
     Write-Host "`nCopying VMGS (VM Guest State) disk..."
     & $azCopyExe copy $vmgsSas $vmgsDestUrl --blob-type PageBlob
@@ -194,7 +196,7 @@ if ($vmgsSas) {
 
     $blobExpiry  = [System.DateTime]::UtcNow.AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
     $vmgsBlobSas = (az storage blob generate-sas `
-        --account-name $DestStorageAccount --account-key $saKey `
+        --account-name $DestStorageAccount --as-user --auth-mode login `
         --container-name $OutputContainer --name $vmgsBlobName `
         --permissions r --expiry $blobExpiry --https-only -o tsv 2>$null)
     $vmgsUri = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$vmgsBlobName`?$vmgsBlobSas"
@@ -211,7 +213,7 @@ Write-Host "  Temporary disk deleted."
 az account set --subscription $DestSubscriptionId 2>$null
 $blobExpiry  = [System.DateTime]::UtcNow.AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
 $osBlobSas   = (az storage blob generate-sas `
-    --account-name $DestStorageAccount --account-key $saKey `
+    --account-name $DestStorageAccount --as-user --auth-mode login `
     --container-name $OutputContainer --name $osBlobName `
     --permissions r --expiry $blobExpiry --https-only -o tsv 2>$null)
 $vhdUri = "https://$DestStorageAccount.blob.core.windows.net/$OutputContainer/$osBlobName`?$osBlobSas"
