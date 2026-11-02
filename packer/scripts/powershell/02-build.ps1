@@ -24,7 +24,11 @@ param(
     # CIDR allowed to reach the build VM's WinRM port (e.g. your egress IP as x.x.x.x/32).
     # Overrides allowed_inbound_ip in the vars file. Without either, the build stops:
     # Packer would otherwise open WinRM on the build VM to the whole internet.
-    [string]$AllowedInboundIp
+    [string]$AllowedInboundIp,
+
+    # Leave the build VM and its resources in place if the build fails (packer -on-error=abort),
+    # so you can troubleshoot it. See "A build fails or hangs" in docs/troubleshooting.md.
+    [switch]$KeepOnError
 )
 
 $ErrorActionPreference = "Stop"
@@ -89,7 +93,12 @@ Write-Host ""
 
 Push-Location $versionDir
 try {
-    packer build -var-file="$varsFilePath" -var "allowed_inbound_ip=$AllowedInboundIp" "$patchedTemplate"
+    $onError = if ($KeepOnError) { "-on-error=abort" } else { "-on-error=cleanup" }
+    if ($KeepOnError) {
+        Write-Host "KeepOnError: on failure the build VM (pkrvm*) and its resources stay in the build resource group."
+        Write-Host "Troubleshoot, then clean up: see 'A build fails or hangs' in docs/troubleshooting.md."
+    }
+    packer build $onError -var-file="$varsFilePath" -var "allowed_inbound_ip=$AllowedInboundIp" "$patchedTemplate"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location

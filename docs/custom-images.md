@@ -400,6 +400,8 @@ Using the non-g2 SKU (`2025-datacenter`) builds a Gen1 image. The resulting cata
     -AllowedInboundIp 203.0.113.10/32
 ```
 
+Add `-KeepOnError` when you're chasing a failing build: the build VM then survives a failure so you can inspect it (see [Troubleshooting → A build fails or hangs](troubleshooting.md#a-build-fails-or-hangs-getting-into-the-build-vm)).
+
 `-AllowedInboundIp` is the address your traffic leaves from. Packer reaches the build VM over WinRM through a public IP, and without this setting its network rule allows any source. The script refuses to build without it. Behind a corporate proxy with several egress addresses, give the range your network team provides.
 
 Build time is approximately 40–50 minutes. The build script clones `citrix-packer-tools` automatically if not present.
