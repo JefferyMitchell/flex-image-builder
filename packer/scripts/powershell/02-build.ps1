@@ -19,7 +19,12 @@ param(
     [string]$Os,
 
     [ValidateSet("v2407","v2411","v2503","v2507")]
-    [string]$VdaVersion = "v2507"
+    [string]$VdaVersion = "v2507",
+
+    # CIDR allowed to reach the build VM's WinRM port (e.g. your egress IP as x.x.x.x/32).
+    # Overrides allowed_inbound_ip in the vars file. Without either, the build stops:
+    # Packer would otherwise open WinRM on the build VM to the whole internet.
+    [string]$AllowedInboundIp
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +40,23 @@ if (-not [System.IO.Path]::IsPathRooted($VarsFile)) {
 if (-not (Test-Path $varsFilePath)) {
     Write-Error "Vars file not found: $varsFilePath"
 }
+
+# Auth: with use_azure_cli_auth (the default) Packer runs as your az CLI sign-in.
+$vars = Get-Content $varsFilePath -Raw | ConvertFrom-Json
+if ("$($vars.use_azure_cli_auth)" -ne "false") {
+    $account = (az account show --query "{user:user.name, sub:name}" -o json 2>$null) | ConvertFrom-Json
+    if (-not $account) { Write-Error "use_azure_cli_auth is on but az is not signed in. Run 'az login' first." }
+    Write-Host "Packer will authenticate as $($account.user) (subscription: $($account.sub))."
+}
+
+# Network: the build VM has a public IP for WinRM. Restrict who can reach it.
+if (-not $AllowedInboundIp) { $AllowedInboundIp = "$($vars.allowed_inbound_ip)" }
+if (-not $AllowedInboundIp -or $AllowedInboundIp -like "<*") {
+    Write-Error ("Set -AllowedInboundIp (or allowed_inbound_ip in the vars file) to the CIDR your traffic leaves from, " +
+                 "e.g. 203.0.113.10/32. Find it with: Invoke-RestMethod https://api.ipify.org (or ask your network team). " +
+                 "Use 0.0.0.0/0 only if you accept WinRM being reachable from anywhere during the build.")
+}
+Write-Host "WinRM on the build VM will accept connections only from $AllowedInboundIp."
 
 # Clone citrix-packer-tools if not present (needed for provisioner scripts)
 $packerToolsDir = Join-Path $repoRoot "citrix-packer-tools"
@@ -56,14 +78,6 @@ if (-not (Test-Path $patchedTemplate)) {
 # so we must run packer from the citrix-packer-tools version directory, with our template file
 $versionDir = Join-Path $packerToolsDir "azure\$VdaVersion"
 
-# Auth: with use_azure_cli_auth (the default) Packer runs as your az CLI sign-in.
-$vars = Get-Content $varsFilePath -Raw | ConvertFrom-Json
-if ("$($vars.use_azure_cli_auth)" -ne "false") {
-    $account = (az account show --query "{user:user.name, sub:name}" -o json 2>$null) | ConvertFrom-Json
-    if (-not $account) { Write-Error "use_azure_cli_auth is on but az is not signed in. Run 'az login' first." }
-    Write-Host "Packer will authenticate as $($account.user) (subscription: $($account.sub))."
-}
-
 Write-Host "`nEnsuring Packer Azure plugin is installed..."
 packer plugins install github.com/hashicorp/azure
 
@@ -75,7 +89,7 @@ Write-Host ""
 
 Push-Location $versionDir
 try {
-    packer build -var-file="$varsFilePath" "$patchedTemplate"
+    packer build -var-file="$varsFilePath" -var "allowed_inbound_ip=$AllowedInboundIp" "$patchedTemplate"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location

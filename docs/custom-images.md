@@ -389,8 +389,11 @@ Using the non-g2 SKU (`2025-datacenter`) builds a Gen1 image. The resulting cata
 .\packer\scripts\powershell\02-build.ps1 `
     -VarsFile win_server_2025.json `
     -Os win_server_2025_dc `
-    -VdaVersion v2507
+    -VdaVersion v2507 `
+    -AllowedInboundIp 203.0.113.10/32
 ```
+
+`-AllowedInboundIp` is the address your traffic leaves from. Packer reaches the build VM over WinRM through a public IP, and without this setting its network rule allows any source. The script refuses to build without it. Behind a corporate proxy with several egress addresses, give the range your network team provides.
 
 Build time is approximately 40–50 minutes. The build script clones `citrix-packer-tools` automatically if not present.
 
