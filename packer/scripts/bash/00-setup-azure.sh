@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# DEPRECATED: use the PowerShell scripts in packer/scripts/powershell (run with pwsh 7 on macOS/Linux).
+# These bash scripts predate the Trusted Launch, gallery and managed-identity changes.
 # 00-setup-azure.sh
 # Creates Azure prerequisites for a Packer build.
 # Usage: ./00-setup-azure.sh --subscription <id> [--location eastus] [--prefix flex-packer]

@@ -27,6 +27,8 @@ Quick path:
 2. Follow [Getting Started](https://jefferymitchell.github.io/flex-image-builder/getting-started)
 3. Pick an [example](infra/examples/) that matches your scenario
 
+**macOS / Linux:** run the PowerShell scripts under [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) (`pwsh`). The bash scripts in `packer/scripts/bash/` are deprecated and do not include the Trusted Launch, gallery or managed-identity changes.
+
 ## Requirements
 
 - Citrix Cloud account with Platform Flex entitlement

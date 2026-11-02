@@ -52,7 +52,7 @@ if (-not (Test-Path $patchedTemplate)) {
     Write-Error "Patched template not found: $patchedTemplate`nAvailable patched templates: win_server_2025_dc, win_desktop_11_23h2"
 }
 
-# The template references OS-version-specific scripts via relative paths (.\ and ..\scripts\)
+# The template references OS-version-specific scripts via relative paths (./ and ../scripts/)
 # so we must run packer from the citrix-packer-tools version directory, with our template file
 $versionDir = Join-Path $packerToolsDir "azure\$VdaVersion"
 
