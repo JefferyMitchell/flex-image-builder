@@ -35,7 +35,14 @@ param(
     [switch]$SkipWindowsUpdate,
 
     # More updates to exclude, by KB number or title pattern (e.g. KB5012170), if one loops or breaks the build.
-    [string[]]$WindowsUpdateExclude = @()
+    [string[]]$WindowsUpdateExclude = @(),
+
+    # Optional app list: Chocolatey package IDs, one per line ('#' comments, "id version" pins a version).
+    # Installed after the template's own steps, just before cleanup. See packer/apps/example.apps.txt.
+    [string]$AppsFile,
+
+    # Optional internal Chocolatey feed for the app installs; the community source is then disabled.
+    [string]$ChocoSource
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,6 +91,20 @@ if ($privateNetwork) {
                      "If policy forbids public IPs, use a private-network build instead (set virtual_network_name).")
     }
     Write-Host "Network: public. WinRM on the build VM will accept connections only from $AllowedInboundIp."
+}
+
+# Apps (optional)
+$chocoVersion = "2.7.4"   # Chocolatey CLI bootstrapped on the build VM
+if ($AppsFile) {
+    $appsFilePath = $AppsFile
+    if (-not (Test-Path $appsFilePath)) { $appsFilePath = Join-Path $repoRoot "packer\apps\$AppsFile" }
+    if (-not (Test-Path $appsFilePath)) { Write-Error "Apps file not found: $AppsFile" }
+    $appsFilePath = (Resolve-Path $appsFilePath).Path
+    $appEntries = @(Get-Content $appsFilePath | ForEach-Object { ($_ -split '#')[0].Trim() } | Where-Object { $_ })
+    if (-not $appEntries) { Write-Error "Apps file has no package IDs: $appsFilePath" }
+    Write-Host "Apps: $($appEntries.Count) Chocolatey packages from $appsFilePath (Chocolatey $chocoVersion$(if ($ChocoSource) { ", feed $ChocoSource" }))."
+} elseif ($ChocoSource) {
+    Write-Warning "-ChocoSource is ignored without -AppsFile."
 }
 
 # Clone citrix-packer-tools if not present (needed for provisioner scripts)
@@ -145,11 +166,27 @@ if (-not $SkipWindowsUpdate) {
     })
 }
 foreach ($p in $t.provisioners) { $provisioners.Add($p) }
+if ($AppsFile) {
+    # Apps go in just before the template's last step: cleanup, which wipes c:\setup.
+    if ("$($provisioners[$provisioners.Count - 1].inline)" -notmatch 'script_cleanup') {
+        Write-Error "Unexpected template shape: the last provisioner isn't the cleanup step."
+    }
+    $appEnv = @("CHOCO_VERSION=$chocoVersion")
+    if ($ChocoSource) { $appEnv += "CHOCO_SOURCE=$ChocoSource" }
+    $appSteps = @(
+        [pscustomobject][ordered]@{ type = "file"; source = $appsFilePath; destination = '{{user `location_setup`}}\apps.txt' }
+        [pscustomobject][ordered]@{ type = "powershell"; script = (Join-Path $repoRoot "packer/scripts/provisioners/install-apps.ps1"); environment_vars = $appEnv }
+        # Some installers return 3010 (reboot required): finish that before cleanup and capture.
+        [pscustomobject][ordered]@{ type = "windows-restart"; restart_timeout = "30m" }
+    )
+    $provisioners.InsertRange($provisioners.Count - 1, [object[]]$appSteps)
+}
 $t.provisioners = $provisioners.ToArray()
 
 $template = Join-Path ([System.IO.Path]::GetTempPath()) "${Os}_build_$PID.json"
 [System.IO.File]::WriteAllText($template, ($t | ConvertTo-Json -Depth 32))
 $steps = if ($SkipWindowsUpdate) { "Windows Update skipped" } else { "Windows Update first" }
+if ($AppsFile) { $steps += ", apps before cleanup" }
 Write-Host "Rendered template: $($t.provisioners.Count) provisioners ($steps)."
 
 Push-Location $versionDir

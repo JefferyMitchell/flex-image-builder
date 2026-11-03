@@ -173,6 +173,20 @@ optimizer_template 'Citrix_Windows_Server_2025.xml' is not in the Citrix Optimiz
 
 ---
 
+## A build fails in the app stage
+
+**Symptom:** the build stops with `choco install failed for <id> (exit <code>)`.
+
+**Cause:** usually one of these:
+- the package ID is wrong (check it with `choco search <name>`);
+- a pinned version doesn't exist;
+- your internal feed (`-ChocoSource`) doesn't carry the package;
+- the installer itself failed.
+
+**Fix:** correct the list and build again. To see the installer's own error, rebuild with `-KeepOnError` and read `C:\ProgramData\chocolatey\logs\chocolatey.log` on the build VM through Run Command (see the next section).
+
+---
+
 ## A build fails or hangs: getting into the build VM
 
 **Background:** each build VM gets a one-time WinRM password. Packer generates it, never writes it anywhere and filters it from its logs, so there's no standing credential to leak. That also means there's no password for *you*. When a build fails or hangs, use the steps below instead. Each one leaves the build VM's image untouched until step 3.
