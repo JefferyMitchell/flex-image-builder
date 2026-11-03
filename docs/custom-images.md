@@ -383,12 +383,16 @@ Using the non-g2 SKU (`2025-datacenter`) builds a Gen1 image. The resulting cata
 
 #### Optimizer template names
 
+`optimizer_template` must be the exact file name from the `Templates` folder of your Optimizer zip. The names carry a build suffix that can change between Optimizer releases. These are from Citrix Optimizer 2.9:
+
 | OS | optimizer_template value |
 |----|--------------------------|
-| Windows Server 2025 | `Citrix_Windows_Server_2025.xml` |
-| Windows Server 2022 | `Citrix_Windows_Server_2022.xml` |
-| Windows Server 2019 | `Citrix_Windows_Server_2019.xml` |
+| Windows Server 2025 | `Citrix_Windows_Server_2025_2009.xml` |
+| Windows Server 2022 | `Citrix_Windows_Server_2022_2009.xml` |
+| Windows Server 2019 | `Citrix_Windows_Server_2019_1809.xml` |
 | Windows 11 23H2     | `Citrix_Windows_11_2009.xml` |
+
+`01-upload-installers.ps1` prints the template names in the zip you upload. If `optimizer_template` isn't one of them, the build stops right after the installer download, before the VDA install, and lists the names the zip has.
 
 ---
 

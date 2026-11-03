@@ -131,6 +131,12 @@
         "Invoke-WebRequest -Uri '{{user `vda_blob_url`}}' -Headers $hdrs -OutFile '{{user `vda_location`}}' -UseBasicParsing",
         "Write-Host 'Downloading Citrix Optimizer via managed identity...'",
         "Invoke-WebRequest -Uri '{{user `optimizer_blob_url`}}' -Headers $hdrs -OutFile '{{user `optimizer_location`}}' -UseBasicParsing",
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+        "$zip = [System.IO.Compression.ZipFile]::OpenRead('{{user `optimizer_location`}}')",
+        "$templates = @($zip.Entries | Where-Object { $_.FullName -match '^Templates[\\\\/][^\\\\/]+\\.xml$' } | ForEach-Object { $_.Name })",
+        "$zip.Dispose()",
+        "if ($templates -notcontains '{{user `optimizer_template`}}') { Write-Error \"optimizer_template '{{user `optimizer_template`}}' is not in the Citrix Optimizer zip, so the image would not be optimized. Templates in this zip: $($templates -join ', ')\"; exit 1 }",
+        "Write-Host 'Optimizer template found: {{user `optimizer_template`}}'",
         "Write-Host 'Downloads complete.'"
       ]
     },
