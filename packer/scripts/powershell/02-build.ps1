@@ -1,6 +1,7 @@
 # 02-build.ps1
 # Runs a Packer build using our patched templates (SAS URL quoting fix applied).
-# Clones citrix-packer-tools for the provisioner scripts; uses our template copy.
+# Clones citrix-packer-tools for the provisioner scripts, then renders a temporary copy of the
+# template with this build's steps (Windows Update first, network mode) and builds from that.
 #
 # Usage:
 #   .\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -VdaVersion v2507
@@ -28,7 +29,13 @@ param(
 
     # Leave the build VM and its resources in place if the build fails (packer -on-error=abort),
     # so you can troubleshoot it. See "A build fails or hangs" in docs/troubleshooting.md.
-    [switch]$KeepOnError
+    [switch]$KeepOnError,
+
+    # Skip the Windows Update stage. For quick test builds only: images for users should be patched.
+    [switch]$SkipWindowsUpdate,
+
+    # More updates to exclude, by KB number or title pattern (e.g. KB5012170), if one loops or breaks the build.
+    [string[]]$WindowsUpdateExclude = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,8 +106,12 @@ if (-not (Test-Path $patchedTemplate)) {
 # so we must run packer from the citrix-packer-tools version directory, with our template file
 $versionDir = Join-Path $packerToolsDir "azure\$VdaVersion"
 
-Write-Host "`nEnsuring Packer Azure plugin is installed..."
+Write-Host "`nEnsuring Packer plugins are installed..."
 packer plugins install github.com/hashicorp/azure
+if (-not $SkipWindowsUpdate) {
+    packer plugins install github.com/rgl/windows-update v0.18.5
+    if ($LASTEXITCODE -ne 0) { Write-Error "Couldn't install the windows-update plugin (github.com/rgl/windows-update v0.18.5)." }
+}
 
 Write-Host "`nRunning Packer build..."
 Write-Host "  Template : $patchedTemplate"
@@ -108,18 +119,38 @@ Write-Host "  Scripts  : $versionDir"
 Write-Host "  Vars     : $varsFilePath"
 Write-Host ""
 
-$template   = $patchedTemplate
+# Render: build from a temporary copy of the template with this build's changes. Legacy JSON
+# templates can't include a provisioner conditionally, so optional steps are added here.
+$t = Get-Content $patchedTemplate -Raw | ConvertFrom-Json
 $packerArgs = @()
 if ($privateNetwork) {
-    # Packer refuses allowed_inbound_ip_addresses together with virtual_network_name, so build
-    # from a temporary copy of the template without it.
-    $t = Get-Content $patchedTemplate -Raw | ConvertFrom-Json
+    # Packer refuses allowed_inbound_ip_addresses together with virtual_network_name.
     foreach ($b in $t.builders) { $b.PSObject.Properties.Remove("allowed_inbound_ip_addresses") }
-    $template = Join-Path ([System.IO.Path]::GetTempPath()) "${Os}_private_network_$PID.json"
-    [System.IO.File]::WriteAllText($template, ($t | ConvertTo-Json -Depth 32))
 } else {
     $packerArgs += "-var", "allowed_inbound_ip=$AllowedInboundIp"
 }
+
+$provisioners = [System.Collections.Generic.List[object]]::new()
+if (-not $SkipWindowsUpdate) {
+    # First, patch the marketplace image to current. Preview updates are excluded, and so is KB5007651
+    # (the Defender "Windows Security platform" update): it's offered again after every install and
+    # loops the provisioner indefinitely.
+    $filters = @('exclude:$_.Title -like "*Preview*"', 'exclude:$_.Title -like "*KB5007651*"')
+    foreach ($x in $WindowsUpdateExclude) { $filters += "exclude:`$_.Title -like `"*$x*`"" }
+    $filters += 'include:$true'
+    $provisioners.Add([pscustomobject][ordered]@{
+        type            = "windows-update"
+        search_criteria = "IsInstalled=0"
+        filters         = $filters
+    })
+}
+foreach ($p in $t.provisioners) { $provisioners.Add($p) }
+$t.provisioners = $provisioners.ToArray()
+
+$template = Join-Path ([System.IO.Path]::GetTempPath()) "${Os}_build_$PID.json"
+[System.IO.File]::WriteAllText($template, ($t | ConvertTo-Json -Depth 32))
+$steps = if ($SkipWindowsUpdate) { "Windows Update skipped" } else { "Windows Update first" }
+Write-Host "Rendered template: $($t.provisioners.Count) provisioners ($steps)."
 
 Push-Location $versionDir
 try {
@@ -132,7 +163,7 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location
-    if ($template -ne $patchedTemplate) { Remove-Item $template -ErrorAction SilentlyContinue }
+    Remove-Item $template -ErrorAction SilentlyContinue
 }
 
 Write-Host "`nBuild complete. Run 04-export-from-gallery.ps1 to export the OS VHD (+ VMGS) and get the SAS URIs for Terraform."
