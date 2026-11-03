@@ -68,6 +68,8 @@
     "image_sku":        "win11-23h2-ent",
     "image_version":    "latest",
     "security_type":    "TrustedLaunch",
+    "secure_boot_enabled": true,
+    "vtpm_enabled":     true,
 
     "communicator":    "winrm",
     "winrm_use_ssl":   true,
