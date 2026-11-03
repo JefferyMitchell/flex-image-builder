@@ -53,7 +53,7 @@ terraform plan   # expect: No changes
 
 **Root cause:** A previous failed apply created the catalog in the Citrix backend. It may be in an Error or Deleting state but the name is still reserved.
 
-**Fix:** Delete the catalog explicitly via the Catalog Service API, then wait for the name to clear before re-applying.
+**Fix:** Delete the catalog explicitly via the Catalog Service API, then wait for the name to clear before re-applying. For a **domain-joined** catalog, use `08-delete-catalog.ps1` instead: a delete without the join credentials ends in `Error` (see [A catalog delete ends in Error](#a-catalog-delete-ends-in-error-errordeletionunknown)).
 
 ```powershell
 # 1. Get a bearer token
@@ -279,3 +279,66 @@ az resource list -g rg-flex-packer-build --query "[?starts_with(name,'pkr')].id"
 
 A soft-deleted `pkrkv…` Key Vault can be purged with `az keyvault purge -n <name>` if your policy allows it.
 
+---
+
+## A catalog image update reverts
+
+**Symptom:** a catalog image update (API `$updateImage`, or the console) goes `Processing` → `Active` and reports success. A few minutes later the catalog is back on its old image. No error appears anywhere.
+
+**Cause:** the new image's generation or Trusted Launch flags (`hyperVGen`, `vtpmEnabled`, `secureBootEnabled`) differ from the catalog's current image. Common ways to get there:
+- **An import that sent `machineGeneration`** instead of `hyperVGen`. The API drops the unknown field and imports a Gen1 image. See the [field map](custom-images.md#terraform--api-field-map).
+- **A Trusted Launch image for a catalog built from a non-Trusted Launch image**, or the reverse.
+
+**Fix:** compare the flags first. `07-update-catalog-image.ps1 -CheckOnly` prints both images' flags and stops on a mismatch.
+- If the new image is wrong, import it again with the right flags.
+- If the catalog is the one that differs, for example to move it to Trusted Launch, create a new catalog from the new image and move users to it.
+
+See [Update a catalog's image](custom-images.md#update-a-catalogs-image).
+
+---
+
+## An imported image stays Pending forever
+
+**Symptom:** an image imported through the API never leaves `Pending`. The image's detail GET shows "Authority was not found".
+
+**Cause:** the import went to `POST https://api.cloud.com/catalogservice/{customerId}/images`, without the site ID. That route looks right, but it's for bring-your-own Azure subscriptions. Without a linked subscription, its images never import.
+
+**Fix:**
+1. Delete the stuck image: `DELETE https://api.cloud.com/catalogservice/{customerId}/images/{imageId}?async=true`, with `Content-Type: application/json` (see the next entry).
+2. Import through the site-scoped route, `POST .../catalogservice/{customerId}/{siteId}/images/$import`, which is what `06-import-to-citrix.ps1` does. [Credentials and site ID](custom-images.md#credentials-and-site-id) shows where the site ID comes from.
+
+---
+
+## HTTP 415 from a Citrix API DELETE
+
+**Symptom:** a `DELETE` to the Quick Deploy API (a catalog or an image) returns `415 Unsupported Media Type`.
+
+**Cause:** the request has no `Content-Type: application/json` header. The API requires it on a DELETE, **even with an empty body**. Many HTTP clients leave the header out when there's no body.
+
+**Fix:** set `Content-Type: application/json` on every call. The scripts in `packer/scripts/powershell/` (`06`–`08`) always do.
+
+---
+
+## A catalog delete ends in Error (ErrorDeletionUnknown)
+
+**Symptom:** deleting a domain-joined catalog fails after a few minutes. The catalog goes to `Error` with `ErrorDeletionUnknown`, and `terraform destroy` stops with:
+
+```
+Error: Catalog deletion is no longer in progress for catalog ID: ..., current state: Error
+```
+
+**Cause:** the delete didn't carry the domain service account, so the backend can't remove the machines' computer accounts. The Terraform provider's catalog delete sends only `deleteVm` and `deleteResourceLocationIfUnused`. It doesn't send the service account or its password, even though both are in state.
+
+**Fix:** delete the catalog with the credentials, then let Terraform remove the rest:
+
+```powershell
+$env:TF_VAR_domain_service_account_password = "<join account password>"
+.\packer\scripts\powershell\08-delete-catalog.ps1 -CatalogName "<catalog>" -TerraformDir infra\examples\<example>
+terraform -chdir=infra\examples\<example> destroy
+```
+
+- **The script also recovers** a catalog already in `Error` from an earlier delete: it sends the credentialed delete again.
+- **Wait for `NotFound` before running `terraform destroy`.** Otherwise the provider's own delete fails with "Deletion of this catalog is already in progress", and the destroy stops.
+- **Keep your domain controllers running** during the delete: it reaches AD through the catalog's connectors.
+
+See [Delete a domain-joined catalog](custom-images.md#delete-a-domain-joined-catalog).

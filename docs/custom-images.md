@@ -639,6 +639,164 @@ When you build a new version:
 
 Terraform will update the template image in place and trigger Citrix to update the catalog. Existing sessions are not interrupted; machines are re-imaged on next restart.
 
+> **Two warnings, from updates made through the API** (the Terraform path sits on the same service but is untested here):
+> - **The new image's generation and Trusted Launch flags must match the catalog's.** If `hyperVGen`, `vtpmEnabled` or `secureBootEnabled` differ, the update reports success and then the catalog quietly goes back to the old image. So you can't move an existing catalog from a non-Trusted Launch image to a Trusted Launch one this way: create a new catalog from the new image.
+> - **Static (dedicated) single-session catalogs are re-provisioned**, and the users' disks don't survive.
+>
+> [`07-update-catalog-image.ps1`](#update-a-catalogs-image) checks both before it changes anything, and confirms afterwards that the update held.
+
+---
+
+## Lifecycle with the API
+
+Three scripts take an image through Citrix with the Quick Deploy API instead of Terraform: import it, move a catalog to it, and delete a domain-joined catalog. Use them in a scripted pipeline, to update the image of a catalog that already exists, or to delete a domain-joined catalog that `terraform destroy` can't.
+
+| Script | What it does | What it changes |
+|---|---|---|
+| `06-import-to-citrix.ps1` | Imports the exported OS VHD and VMGS, waits for `Ready`, reads back the generation and Trusted Launch flags | Adds an image to the library |
+| `07-update-catalog-image.ps1` | Pre-checks, the image update, then a read-back that catches a silent revert | The catalog's image; machines restart onto it |
+| `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
+
+`07` and `08` take `-CatalogName` or `-CatalogId`. All three are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
+
+### Credentials and site ID
+
+The scripts read the API client from the same environment variables as the Citrix Terraform provider:
+
+```powershell
+$env:CITRIX_CUSTOMER_ID   = "your-customer-id"
+$env:CITRIX_CLIENT_ID     = "your-api-client-id"
+$env:CITRIX_CLIENT_SECRET = "your-api-client-secret"   # from your secret manager
+```
+
+- **The client secret** is read from `CITRIX_CLIENT_SECRET` only, never from a parameter, so it stays out of your shell history. It's sent once, to the token endpoint, and never printed.
+- **The token** comes from `POST https://api.cloud.com/cctrustoauth2/root/tokens/clients` (client credentials). Calls send it as `Authorization: CwsAuth Bearer=<token>`. That's Citrix's `CwsAuth` scheme, not a plain `Bearer` header. Tokens last an hour, and the scripts renew them during long waits.
+- **The site ID:** image and catalog calls are site-scoped, `/catalogservice/{customerId}/{siteId}/...`. The console doesn't show the site ID. The scripts read it from `GET https://api.cloud.com/cvad/manage/me` (`Customers[0].Sites[0].Id`); pass `-SiteId` to skip the lookup.
+- **Outside the US**, pass `-ApiHost`: `api-eu.cloud.com`, `api-ap-s.cloud.com` or `api.citrixcloud.jp`.
+
+### Import an image
+
+After [Step 5](#step-5--export-the-gallery-version-to-vhd), pass the two URIs the export printed:
+
+```powershell
+.\packer\scripts\powershell\06-import-to-citrix.ps1 `
+    -Name         WinServer2025DC-1.1.0 `
+    -VhdUri       "<vhd_uri from the export>" `
+    -GuestDiskUri "<guest_disk_uri from the export>" `
+    -Region       eastus
+```
+
+**Before it calls Citrix,** the script checks that:
+- both URIs carry a read SAS that hasn't expired (it warns under two hours left);
+- Secure Boot has its VMGS blob;
+- no image already has that name.
+
+**It sends** `POST https://api.cloud.com/catalogservice/{customerId}/{siteId}/images/$import`:
+
+```json
+{
+  "name": "WinServer2025DC-1.1.0",
+  "vhdUri": "<vhd_uri>",
+  "vhdEncryptionUri": "<guest_disk_uri>",
+  "osPlatform": "Windows",
+  "region": "eastus",
+  "hyperVGen": "V2",
+  "vtpmEnabled": true,
+  "secureBootEnabled": true,
+  "notes": "Imported by flex-image-builder 06-import-to-citrix.ps1"
+}
+```
+
+**Then it waits** while the image goes `Pending` → `Importing` → `Ready`, usually 15–25 minutes.
+
+**Then it reads back** `hyperVGen`, `vtpmEnabled` and `secureBootEnabled` from the image. It fails unless all three are what it asked for. The API ignores fields it doesn't recognize and still returns success (see the [field map](#terraform--api-field-map)), so this read-back is the only proof the image is right.
+
+Trusted Launch (Gen2, vTPM, Secure Boot) is the default. For a Gen2 image without guest state, add `-NoSecureBoot` and leave out `-GuestDiskUri`; vTPM alone works from a plain Gen2 VHD.
+
+To check an image that's already imported, or to keep waiting after a timeout, run `06-import-to-citrix.ps1 -ImageId <id>`. Add the same `-NoSecureBoot` / `-NoVtpm` you imported with.
+
+> **Use the site-scoped route.** `POST /catalogservice/{customerId}/images`, without the site ID, looks right but is the bring-your-own-subscription route. Its images stay `Pending` forever. See [Troubleshooting](troubleshooting.md#an-imported-image-stays-pending-forever).
+
+### Update a catalog's image
+
+Run the checks first. `-CheckOnly` makes no changes:
+
+```powershell
+.\packer\scripts\powershell\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id> -CheckOnly
+.\packer\scripts\powershell\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id>
+```
+
+**Pre-checks.** The script stops, and changes nothing, unless all of these hold:
+- the new image is `Ready`;
+- it has the catalog's session type (single- or multi-session);
+- the catalog is `Active` or `InputRequired`;
+- its `hyperVGen`, `vtpmEnabled` and `secureBootEnabled` match the catalog's **current image**. A mismatch is the silent revert described under [Updating an Image](#updating-an-image);
+- the catalog isn't static (dedicated) single-session. Those machines are re-provisioned and users lose their disks; `-Force` overrides this check only.
+
+**The update** is `POST .../catalogs/{catalogId}/$updateImage` with `{"TemplateId": "<image id>", "CitrixPrepared": false, "VdaUpdateDelay": 0}`, in that exact casing. `CitrixPrepared` is `false` for an image you imported; the script takes it from the image. `-VdaUpdateDelay` sets when machines restart onto the new image:
+
+| `-VdaUpdateDelay` | Machines restart |
+|---|---|
+| `0` (default) | now, all of them; sessions on them end |
+| `-1` | at each machine's next shutdown |
+| `N` | spread over N minutes, with a warning to users first |
+
+**The read-back.** The script waits for the catalog to go `Processing` → `Active`. It waits `-SettleMinutes` more (default 5), because a revert shows up only after the update has reported success. Then it confirms the catalog's `imageId` is the new image, and fails if it isn't.
+
+> **Citrix-prepared images report the wrong generation in their detail view.** `GET .../images/{id}` returns `hyperVGen: V1` (and no region) for Citrix-prepared Gen2 images. The image list, `GET .../images`, has the right value. The script compares flags from the list, and says so when the two disagree.
+
+### Delete a domain-joined catalog
+
+A domain-joined catalog's delete needs the domain service account, so the backend can remove the machines' computer accounts. Without it, the delete ends in `Error` (`ErrorDeletionUnknown`). The Terraform provider's delete doesn't send the credentials, even though they're in state, so `terraform destroy` fails this way. Sending a credentialed delete again also recovers a catalog left in `Error` by an earlier delete.
+
+```powershell
+$env:TF_VAR_domain_service_account_password = "<join account password>"   # same variable Terraform uses
+.\packer\scripts\powershell\08-delete-catalog.ps1 -CatalogName "Task Worker Desktop" -WhatIf
+.\packer\scripts\powershell\08-delete-catalog.ps1 -CatalogName "Task Worker Desktop"
+```
+
+The script asks you to confirm. It sends `DELETE .../catalogs/{catalogId}?async=true` with `Content-Type: application/json` (without that header the call fails with HTTP 415), and this body:
+
+```json
+{"forceDelete": false, "deleteVm": true, "deleteResourceLocationIfUnused": false,
+ "serviceAccount": "<account>", "serviceAccountPassword": "<password>"}
+```
+
+Then it polls `GET .../catalogs/status?catalogId={catalogId}` until the catalog is `NotFound`, usually 8–15 minutes.
+
+- **The account** defaults to the one the catalog was created with. Pass `-ServiceAccount` to use another.
+- **The password** comes from the environment variable named by `-PasswordVariable` (default `TF_VAR_domain_service_account_password`) and is never printed.
+- **Your domain controllers must be running.** The delete reaches AD through the catalog's connectors.
+- **`-DeleteResourceLocationIfUnused`** also removes the catalog's resource location and its connectors when no other catalog uses them. The connectors' computer accounts can stay behind in AD; remove them yourself.
+
+**With Terraform, the order matters:**
+
+1. `08-delete-catalog.ps1 -CatalogName <name> -TerraformDir <example dir>`: the credentialed delete, the wait for `NotFound`, then `terraform state rm` for the catalog. The address defaults to `module.catalog.citrix_quickdeploy_catalog.this`; set `-TerraformAddress` for another one.
+2. `terraform destroy` for everything else.
+
+If you run `terraform destroy` while the delete is still running, the provider's own delete fails with "Deletion of this catalog is already in progress", and the destroy stops.
+
+### Terraform ↔ API field map
+
+The Quick Deploy API reads request bodies leniently. It drops property names it doesn't recognize, with no warning, and the call still succeeds. A field named as in Terraform is the easy mistake:
+
+- sending `machineGeneration: "V2"` imports a **Gen1** image, and a later catalog update with it reverts;
+- sending `guestDiskUri` imports no guest state.
+
+| Terraform (`citrix_quickdeploy_template_image`) | Quick Deploy API (`.../images/$import`) |
+|---|---|
+| `machine_generation` | `hyperVGen` |
+| `vhd_uri` | `vhdUri` |
+| `guest_disk_uri` | `vhdEncryptionUri` |
+| `vtpm_enabled` | `vtpmEnabled` |
+| `secure_boot_enabled` | `secureBootEnabled` |
+| `os_platform` | `osPlatform` |
+| `notes` | `notes` |
+
+For catalog naming, the API shape is `"machineNamingScheme": {"namingScheme": "abc##", "isSchemeTypeNumeric": true}`. Sending `namingSchemeType: "Numeric"` names machines alphabetically.
+
+The API names come from Citrix's public Go SDK models ([`ImportTemplateImageModel`](https://github.com/citrix/citrix-daas-rest-go/blob/main/citrixquickdeploy/docs/ImportTemplateImageModel.md)). **Rule of thumb:** after any import, read back `hyperVGen`, `vtpmEnabled` and `secureBootEnabled` before you use the image; `06-import-to-citrix.ps1 -ImageId <id>` does that.
+
 ---
 
 ## Terraform State Recovery
@@ -667,7 +825,7 @@ $catalogs = Invoke-RestMethod -Uri "https://api.cloud.com/catalogservice/<custom
 $catalogs.items | Where-Object { $_.name -eq "YourCatalogName" } | Select-Object id, name, state
 ```
 
-> The `<site_id>` GUID is not shown in the Citrix UI. Find it by enabling Terraform debug logging (`TF_LOG=DEBUG`) and searching the output for `catalogservice/<customer_id>/` — the GUID after the customer ID is the site ID.
+> The `<site_id>` GUID is not shown in the Citrix UI. Get it from `GET https://api.cloud.com/cvad/manage/me` with the same headers: it's `Customers[0].Sites[0].Id`. (Or enable Terraform debug logging, `TF_LOG=DEBUG`, and search the output for `catalogservice/<customer_id>/`: the GUID after the customer ID is the site ID.)
 
 **2. Import the catalog into Terraform state:**
 
