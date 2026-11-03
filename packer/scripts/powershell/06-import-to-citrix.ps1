@@ -148,10 +148,28 @@ if ($PSCmdlet.ParameterSetName -eq "Import") {
 
 # ── Wait for Ready ─────────────────────────────────────────────────────────────
 Write-Host "`nWaiting for the image to be Ready (Pending → Importing → Ready, usually 15-25 minutes)..."
-$deadline = [DateTime]::UtcNow.AddMinutes($TimeoutMinutes)
+$start = [DateTime]::UtcNow
+$deadline = $start.AddMinutes($TimeoutMinutes)
 $last = ""
+$seen = $false
+$serverErrors = 0
 while ($true) {
-    $image = Get-CitrixImage $ImageId
+    try {
+        $image = Get-CitrixImage $ImageId
+        $seen = $true
+        $serverErrors = 0
+    } catch {
+        # Right after $import, GET on the new image can return 404 ("Authority was not found") for a few
+        # seconds, and the API occasionally returns a 5xx. Retry those instead of abandoning an import
+        # that is actually running.
+        $code = $_.Exception.Data["StatusCode"]
+        $early404 = $code -eq 404 -and -not $seen -and ([DateTime]::UtcNow - $start).TotalMinutes -lt 5
+        $transient = $code -ge 500 -and (++$serverErrors) -le 5
+        if (-not ($early404 -or $transient)) { throw }
+        Write-Host "  $([DateTime]::UtcNow.ToString('HH:mm:ss'))Z  HTTP $code from the API, retrying"
+        Start-Sleep -Seconds $PollSeconds
+        continue
+    }
     $now = "$($image.state)/$($image.subState)"
     if ($now -ne $last) {
         Write-Host "  $([DateTime]::UtcNow.ToString('HH:mm:ss'))Z  $($image.state)$(if ($image.subState) { " ($($image.subState))" })$(if ($image.status) { " - $($image.status)" })"
