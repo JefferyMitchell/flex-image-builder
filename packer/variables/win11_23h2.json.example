@@ -17,6 +17,10 @@
   "winrm_insecure":         "true",
   "allowed_inbound_ip":     "<your egress IP>/32",
 
+  "virtual_network_name":                "",
+  "virtual_network_subnet_name":         "",
+  "virtual_network_resource_group_name": "",
+
   "install_browser_chrome_flag":  "true",
   "install_browser_firefox_flag": "false"
 }

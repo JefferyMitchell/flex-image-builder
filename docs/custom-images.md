@@ -365,6 +365,8 @@ Leave `vda_location` and `optimizer_location` out: they are the download paths *
 
 Leave `userpass` out. Packer generates a one-time WinRM password for each build VM and filters it from its logs, so there's no password to store.
 
+Leave the three `virtual_network_*` keys empty unless your subscription forbids public IPs. Then see [Private-network builds](#private-network-builds-no-public-ip) under Step 4.
+
 The filled-in file is git-ignored, but never commit it anyway: in `ServicePrincipal` mode it holds the client secret.
 
 #### Gen2 SKU selection
@@ -402,7 +404,33 @@ Using the non-g2 SKU (`2025-datacenter`) builds a Gen1 image. The resulting cata
 
 Add `-KeepOnError` when you're chasing a failing build: the build VM then survives a failure so you can inspect it (see [Troubleshooting → A build fails or hangs](troubleshooting.md#a-build-fails-or-hangs-getting-into-the-build-vm)).
 
-`-AllowedInboundIp` is the address your traffic leaves from. Packer reaches the build VM over WinRM through a public IP, and without this setting its network rule allows any source. The script refuses to build without it. Behind a corporate proxy with several egress addresses, give the range your network team provides.
+`-AllowedInboundIp` is the address your traffic leaves from. By default Packer reaches the build VM over WinRM through a public IP, and without this setting its network rule allows any source. The script refuses to build without it. Behind a corporate proxy with several egress addresses, give the range your network team provides.
+
+#### Private-network builds (no public IP)
+
+Many enterprise subscriptions deny public IP addresses by policy; Azure Landing Zone "corp" policies do, for example. The default build then fails within a minute with `InvalidTemplateDeployment` and `policy violation`. In that case, build on your own network:
+
+| You need | Details |
+|---|---|
+| **A subnet for the build VM** | An existing subnet, in the **same subscription and region** as the build resource group (a NIC can't join a VNet in another subscription). The build VM needs outbound HTTPS, through your firewall or NAT, to your storage account (the installers) and, if you install browsers, to `dl.google.com` and `download.mozilla.org`. It needs no inbound access from outside the VNet. If the VNet uses custom DNS servers (for example, domain controllers), they must be running during the build. |
+| **A machine to run the build from** | Something that can reach the subnet on TCP 5986 (WinRM over HTTPS): a small VM in the same or a peered VNet, or a self-hosted CI agent. It needs PowerShell 7, Azure CLI, Packer and git, plus outbound HTTPS to Azure Resource Manager, Microsoft Entra ID and GitHub (for the Packer plugin and `citrix-packer-tools`). On an Azure VM, run `az login --identity` first: Packer then signs in as the VM's managed identity, and no secret is stored on the machine. |
+| **Permission to join the subnet** | The identity Packer runs as needs `Microsoft.Network/virtualNetworks/subnets/join/action` on the subnet, in addition to Contributor on the build resource group. Network Contributor scoped to just that subnet is enough. |
+
+Then set the three keys in your vars file:
+
+```json
+"virtual_network_name":                "vnet-build",
+"virtual_network_subnet_name":         "snet-image-build",
+"virtual_network_resource_group_name": "rg-network"
+```
+
+With `virtual_network_name` set, `02-build.ps1` runs a private-network build:
+
+- Packer creates no VNet, public IP or network security group.
+- The build VM's NIC joins your subnet, so the subnet's own network security group and routes apply.
+- `allowed_inbound_ip` and `-AllowedInboundIp` are ignored. Packer refuses them alongside `virtual_network_name`, so the script builds from a temporary copy of the template without that setting.
+
+Run `02-build.ps1` from the machine inside the network. Steps 1, 2, 5 and 6 can still run from your workstation, because they only call Azure and Citrix Cloud APIs.
 
 Build time is approximately 40–50 minutes. The build script clones `citrix-packer-tools` automatically if not present.
 
