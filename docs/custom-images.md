@@ -443,7 +443,7 @@ With `virtual_network_name` set, `02-build.ps1` runs a private-network build:
 
 Run `02-build.ps1` from the machine inside the network. Steps 1, 2, 5 and 6 can still run from your workstation, because they only call Azure and Citrix Cloud APIs.
 
-Build time is about 1 hour, plus 30–60 minutes for Windows Update depending on how far behind the marketplace image is. The build script clones `citrix-packer-tools` automatically if not present.
+Build time is about 1 hour, plus 5–60 minutes for Windows Update depending on how far behind the marketplace image is. The build script clones `citrix-packer-tools` automatically if not present.
 
 #### Windows Update
 
@@ -477,6 +477,8 @@ SharedImageGalleryImageVersion: 1.0.0
 ```
 
 Bump `gallery_image_version` in your vars file for every build: a published version cannot be overwritten.
+
+For patching, app changes, upgrades and rollback over time, see [Managing Images](managing-images.md).
 
 #### What the build verifies and records
 
