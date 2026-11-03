@@ -1,6 +1,8 @@
 # 01-upload-installers.ps1
-# Uploads VDA installer and Citrix Optimizer to Azure Blob Storage.
-# Prints plain blob URLs (no SAS) to paste into your vars file.
+# Uploads VDA installer and Citrix Optimizer to Azure Blob Storage, keeping their file names
+# (e.g. VDAServerSetup_2507.exe), so you can always tell which VDA a build used.
+# Prints plain blob URLs (no SAS) and each file's SHA-256 to paste into your vars file: the build VM
+# checks both hashes, and the VDA installer's signature, before it installs anything.
 #
 # Authentication: uses your active az login session (--auth-mode login).
 # No account keys or SAS tokens are generated — the Packer build VM downloads
@@ -9,7 +11,7 @@
 # Usage:
 #   .\01-upload-installers.ps1 `
 #     -StorageAccount flexpackerbuild `
-#     -VdaPath C:\Downloads\VDASetup.exe `
+#     -VdaPath C:\Downloads\VDAServerSetup_2507.exe `
 #     -OptimizerPath C:\Downloads\CitrixOptimizer.zip
 
 param(
@@ -31,26 +33,33 @@ $optimizerTemplates = @($zip.Entries | Where-Object { $_.FullName -match '^Templ
 $zip.Dispose()
 if (-not $optimizerTemplates) { Write-Error "No Templates\*.xml found in $OptimizerPath. Is it the Citrix Optimizer zip?" }
 
-Write-Host "`nUploading VDA installer..."
+$vdaName = Split-Path $VdaPath -Leaf
+$optName = Split-Path $OptimizerPath -Leaf
+$vdaHash = (Get-FileHash $VdaPath -Algorithm SHA256).Hash
+$optHash = (Get-FileHash $OptimizerPath -Algorithm SHA256).Hash
+
+Write-Host "`nUploading VDA installer ($vdaName)..."
 az storage blob upload `
     --account-name $StorageAccount --auth-mode login `
     --container-name $Container `
-    --file $VdaPath --name "VDASetup.exe" `
-    --overwrite | Out-Null
+    --file $VdaPath --name $vdaName --metadata "sha256=$vdaHash" `
+    --overwrite --no-progress | Out-Null
 
-Write-Host "Uploading Citrix Optimizer..."
+Write-Host "Uploading Citrix Optimizer ($optName)..."
 az storage blob upload `
     --account-name $StorageAccount --auth-mode login `
     --container-name $Container `
-    --file $OptimizerPath --name "CitrixOptimizer.zip" `
-    --overwrite | Out-Null
+    --file $OptimizerPath --name $optName --metadata "sha256=$optHash" `
+    --overwrite --no-progress | Out-Null
 
-$vdaUrl = "https://$StorageAccount.blob.core.windows.net/$Container/VDASetup.exe"
-$optUrl = "https://$StorageAccount.blob.core.windows.net/$Container/CitrixOptimizer.zip"
+$vdaUrl = "https://$StorageAccount.blob.core.windows.net/$Container/$vdaName"
+$optUrl = "https://$StorageAccount.blob.core.windows.net/$Container/$optName"
 
 Write-Host "`n--- Paste these into your vars file ---"
 Write-Host "vda_blob_url       = `"$vdaUrl`""
+Write-Host "vda_sha256         = `"$vdaHash`""
 Write-Host "optimizer_blob_url = `"$optUrl`""
+Write-Host "optimizer_sha256   = `"$optHash`""
 Write-Host "optimizer_template = one of these, exactly as written:"
 $optimizerTemplates | ForEach-Object { Write-Host "  $_" }
 Write-Host ""

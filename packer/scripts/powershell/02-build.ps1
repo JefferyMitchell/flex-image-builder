@@ -42,7 +42,11 @@ param(
     [string]$AppsFile,
 
     # Optional internal Chocolatey feed for the app installs; the community source is then disabled.
-    [string]$ChocoSource
+    [string]$ChocoSource,
+
+    # citrix-packer-tools commit or tag to build with (its VDA, Optimizer and cleanup scripts), instead of
+    # whatever is on main the day you build. The default is the commit this repo was last validated with.
+    [string]$PackerToolsRef = "2d3a906959c3693ff7edbe51928b446f607eac44"
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,6 +97,14 @@ if ($privateNetwork) {
     Write-Host "Network: public. WinRM on the build VM will accept connections only from $AllowedInboundIp."
 }
 
+# Installers: the build VM checks both downloads against these hashes, and the VDA installer's signature,
+# before it installs anything. 01-upload-installers.ps1 prints them.
+foreach ($k in 'vda_sha256', 'optimizer_sha256') {
+    if ("$($vars.$k)" -notmatch '^[0-9a-fA-F]{64}$') {
+        Write-Error "Set $k in the vars file to the installer's SHA-256. 01-upload-installers.ps1 prints it."
+    }
+}
+
 # Apps (optional)
 $chocoVersion = "2.7.4"   # Chocolatey CLI bootstrapped on the build VM
 if ($AppsFile) {
@@ -107,15 +119,19 @@ if ($AppsFile) {
     Write-Warning "-ChocoSource is ignored without -AppsFile."
 }
 
-# Clone citrix-packer-tools if not present (needed for provisioner scripts)
+# citrix-packer-tools provides the VDA, Optimizer and cleanup scripts. Pin it to -PackerToolsRef.
 $packerToolsDir = Join-Path $repoRoot "citrix-packer-tools"
 if (-not (Test-Path $packerToolsDir)) {
     Write-Host "Cloning citrix-packer-tools..."
-    git clone https://github.com/citrix/citrix-packer-tools.git $packerToolsDir
+    git clone --quiet https://github.com/citrix/citrix-packer-tools.git $packerToolsDir
 } else {
-    Write-Host "citrix-packer-tools already present, pulling latest..."
-    git -C $packerToolsDir pull
+    git -C $packerToolsDir fetch --quiet origin
 }
+git -C $packerToolsDir checkout --quiet --detach $PackerToolsRef
+if ($LASTEXITCODE -ne 0) { Write-Error "Couldn't check out citrix-packer-tools at '$PackerToolsRef'." }
+$packerToolsCommit = "$(git -C $packerToolsDir rev-parse HEAD)".Trim()
+Write-Host "citrix-packer-tools: $packerToolsCommit"
+
 
 # Use our patched template (fixes SAS URL quoting for PowerShell inline provisioners)
 $patchedTemplate = Join-Path $repoRoot "packer\templates\${Os}_packer_template.json"
@@ -128,10 +144,17 @@ if (-not (Test-Path $patchedTemplate)) {
 $versionDir = Join-Path $packerToolsDir "azure\$VdaVersion"
 
 Write-Host "`nEnsuring Packer plugins are installed..."
-packer plugins install github.com/hashicorp/azure
+packer plugins install github.com/hashicorp/azure v2.6.5
 if (-not $SkipWindowsUpdate) {
     packer plugins install github.com/rgl/windows-update v0.18.5
     if ($LASTEXITCODE -ne 0) { Write-Error "Couldn't install the windows-update plugin (github.com/rgl/windows-update v0.18.5)." }
+}
+# Legacy JSON templates use the newest installed version of each plugin, so say if that isn't the pinned one.
+$plugins = @(packer plugins installed | ForEach-Object { Split-Path $_ -Leaf } |
+    ForEach-Object { if ($_ -match '^packer-plugin-([a-z-]+)_v([0-9.]+)_') { "$($Matches[1]) $($Matches[2])" } } | Sort-Object -Unique)
+$newestAzure = @($plugins | Where-Object { $_ -like 'azure *' } | ForEach-Object { [version]($_ -split ' ')[1] } | Sort-Object)[-1]
+if ($newestAzure -and $newestAzure -ne [version]"2.6.5") {
+    Write-Warning "azure plugin $newestAzure is installed, and legacy JSON templates use the newest installed version. Remove it to build with the pinned v2.6.5."
 }
 
 Write-Host "`nRunning Packer build..."
@@ -183,11 +206,27 @@ if ($AppsFile) {
 }
 $t.provisioners = $provisioners.ToArray()
 
+# Base image: resolve "latest" to the exact marketplace version, so the build is repeatable and recorded.
+$b0 = $t.builders[0]
+$baseImage = "$($b0.image_publisher):$($b0.image_offer):$($b0.image_sku)"
+$baseVersion = "$($vars.image_version)"
+if (-not $baseVersion -or $baseVersion -eq "latest") {
+    $baseVersion = @(az vm image list --location "$($vars.location)" --publisher $b0.image_publisher --offer $b0.image_offer --sku $b0.image_sku --all --query "[].version" -o tsv 2>$null) |
+        Sort-Object { [version]$_ } | Select-Object -Last 1
+}
+if (-not $baseVersion) { Write-Error "Couldn't resolve the marketplace version of $baseImage in $($vars.location). Set image_version in the vars file." }
+$packerArgs += "-var", "image_version=$baseVersion"
+Write-Host "Base image: ${baseImage}:$baseVersion"
+
 $template = Join-Path ([System.IO.Path]::GetTempPath()) "${Os}_build_$PID.json"
 [System.IO.File]::WriteAllText($template, ($t | ConvertTo-Json -Depth 32))
 $steps = if ($SkipWindowsUpdate) { "Windows Update skipped" } else { "Windows Update first" }
 if ($AppsFile) { $steps += ", apps before cleanup" }
 Write-Host "Rendered template: $($t.provisioners.Count) provisioners ($steps)."
+
+$recordDir = Join-Path $repoRoot "build-records"
+New-Item -ItemType Directory -Force -Path $recordDir | Out-Null
+$buildLog = Join-Path $recordDir ("$($vars.gallery_image_name)-$($vars.gallery_image_version)-" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ") + ".log")
 
 Push-Location $versionDir
 try {
@@ -196,11 +235,61 @@ try {
         Write-Host "KeepOnError: on failure the build VM (pkrvm*) and its resources stay in the build resource group."
         Write-Host "Troubleshoot, then clean up: see 'A build fails or hangs' in docs/troubleshooting.md."
     }
-    packer build $onError -var-file="$varsFilePath" @packerArgs "$template"
+    packer build $onError -var-file="$varsFilePath" @packerArgs "$template" 2>&1 | Tee-Object -FilePath $buildLog
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location
     Remove-Item $template -ErrorAction SilentlyContinue
 }
+
+# Build record: what went into this image, written only after a successful build.
+$out = @(Get-Content $buildLog) -replace '\x1b\[[0-9;]*m', ''
+$published = $out | Select-String 'SharedImageGalleryImageVersion: (\S+)' | Select-Object -Last 1
+if (-not $published) {
+    Write-Warning "Packer didn't report a gallery version, so no build record was written. Log: $buildLog"
+    exit 0
+}
+$galleryVersion = $published.Matches[0].Groups[1].Value
+function Get-Field([string]$Line, [string]$Name) {
+    if ($Line -match "\b$Name=(`"[^`"]*`"|\S+)") { $Matches[1].Trim('"') }
+}
+$vdaLine = "$($out | Where-Object { $_ -match 'build-input: vda=' } | Select-Object -Last 1)"
+$optLine = "$($out | Where-Object { $_ -match 'build-input: optimizer=' } | Select-Object -Last 1)"
+$vmLine  = "$($out | Where-Object { $_ -match 'build-vm: ' } | Select-Object -Last 1)"
+$record = [ordered]@{
+    schema       = 1
+    built_utc    = (Get-Date).ToUniversalTime().ToString("o")
+    template     = $Os
+    network      = $(if ($privateNetwork) { "private" } else { "public" })
+    gallery      = [ordered]@{ resource_group = $vars.image_resource_group; name = $vars.gallery_name; image = $vars.gallery_image_name; version = $galleryVersion }
+    base_image   = [ordered]@{ urn = $baseImage; version = $baseVersion }
+    installers   = [ordered]@{
+        vda       = [ordered]@{ file = (Get-Field $vdaLine 'vda'); sha256 = (Get-Field $vdaLine 'sha256'); thumbprint = (Get-Field $vdaLine 'thumbprint'); signer = $(if ($vdaLine -match 'signer=(.+)$') { $Matches[1].Trim() }) }
+        optimizer = [ordered]@{ file = (Get-Field $optLine 'optimizer'); sha256 = (Get-Field $optLine 'sha256'); template = (Get-Field $optLine 'template') }
+    }
+    build_vm     = [ordered]@{ os = (Get-Field $vmLine 'os'); build = (Get-Field $vmLine 'build'); secure_boot = (Get-Field $vmLine 'secureboot'); tpm = (Get-Field $vmLine 'tpm') }
+    windows_update = [ordered]@{
+        enabled   = (-not $SkipWindowsUpdate)
+        excluded  = @('Preview', 'KB5007651') + $WindowsUpdateExclude
+        installed = @($out | Where-Object { $_ -match 'Found Windows update' } | ForEach-Object { [regex]::Matches($_, 'KB\d+') | ForEach-Object Value } | Sort-Object -Unique)
+    }
+    apps         = @($out | ForEach-Object { if ($_ -match 'installed-app: ([^|\s]+)\|(\S+)') { [ordered]@{ id = $Matches[1]; version = $Matches[2] } } })
+    downloads    = @($out | ForEach-Object { if ($_ -match 'download: (.+)$') { $Matches[1].Trim() } })
+    tools        = [ordered]@{ packer = "$(packer version | Select-Object -First 1)".Trim(); plugins = $plugins; citrix_packer_tools = $packerToolsCommit; scripts = $VdaVersion }
+}
+$recordName = "$($vars.gallery_image_name)-$galleryVersion.json"
+$recordPath = Join-Path $recordDir $recordName
+$record | ConvertTo-Json -Depth 8 | Set-Content -Path $recordPath
+Write-Host "`nBuild record: $recordPath"
+
+# Keep a copy next to the installers, and the key fields on the gallery version itself.
+$storageAccount = ([uri]$vars.vda_blob_url).Host.Split('.')[0]
+az storage container create --auth-mode login --account-name $storageAccount --name build-records --only-show-errors -o none 2>$null
+az storage blob upload --auth-mode login --account-name $storageAccount --container-name build-records --file $recordPath --name $recordName --overwrite --only-show-errors -o none
+if ($LASTEXITCODE -ne 0) { Write-Warning "Couldn't upload the build record to $storageAccount/build-records (needs Storage Blob Data Contributor). The local copy stands." }
+az sig image-version update --resource-group $vars.image_resource_group --gallery-name $vars.gallery_name --gallery-image-definition $vars.gallery_image_name --gallery-image-version $galleryVersion `
+    --set "tags.vda=$($record.installers.vda.file)" "tags.vdaSha256=$($record.installers.vda.sha256)" "tags.baseImage=$baseVersion" "tags.packerTools=$($packerToolsCommit.Substring(0, 12))" "tags.buildRecord=build-records/$recordName" `
+    --only-show-errors -o none
+if ($LASTEXITCODE -ne 0) { Write-Warning "Couldn't tag gallery version $galleryVersion with the build record's key fields." }
 
 Write-Host "`nBuild complete. Run 04-export-from-gallery.ps1 to export the OS VHD (+ VMGS) and get the SAS URIs for Terraform."

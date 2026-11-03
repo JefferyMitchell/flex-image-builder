@@ -14,6 +14,10 @@
     "managed_identity_id": "",
     "vda_blob_url": "",
     "optimizer_blob_url": "",
+    "vda_sha256": "",
+    "optimizer_sha256": "",
+    "vda_signer": "Citrix Systems, Inc.",
+    "image_version": "latest",
     "vda_location": "C:\\Windows\\Temp\\VDASetup.exe",
     "optimizer_location": "C:\\Windows\\Temp\\CitrixOptimizer.zip",
 
@@ -66,7 +70,7 @@
     "image_publisher":  "MicrosoftWindowsDesktop",
     "image_offer":      "windows-11",
     "image_sku":        "win11-23h2-ent",
-    "image_version":    "latest",
+    "image_version":    "{{user `image_version`}}",
     "security_type":    "TrustedLaunch",
     "secure_boot_enabled": true,
     "vtpm_enabled":     true,
@@ -126,20 +130,16 @@
     },
     {
       "type": "powershell",
-      "inline": [
-        "$token = (Invoke-RestMethod -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://storage.azure.com/' -Headers @{Metadata='true'}).access_token",
-        "$hdrs = @{ Authorization = \"Bearer $token\"; 'x-ms-version' = '2020-04-08' }",
-        "Write-Host 'Downloading VDA installer via managed identity...'",
-        "Invoke-WebRequest -Uri '{{user `vda_blob_url`}}' -Headers $hdrs -OutFile '{{user `vda_location`}}' -UseBasicParsing",
-        "Write-Host 'Downloading Citrix Optimizer via managed identity...'",
-        "Invoke-WebRequest -Uri '{{user `optimizer_blob_url`}}' -Headers $hdrs -OutFile '{{user `optimizer_location`}}' -UseBasicParsing",
-        "Add-Type -AssemblyName System.IO.Compression.FileSystem",
-        "$zip = [System.IO.Compression.ZipFile]::OpenRead('{{user `optimizer_location`}}')",
-        "$templates = @($zip.Entries | Where-Object { $_.FullName -match '^Templates[\\\\/][^\\\\/]+\\.xml$' } | ForEach-Object { $_.Name })",
-        "$zip.Dispose()",
-        "if ($templates -notcontains '{{user `optimizer_template`}}') { Write-Error \"optimizer_template '{{user `optimizer_template`}}' is not in the Citrix Optimizer zip, so the image would not be optimized. Templates in this zip: $($templates -join ', ')\"; exit 1 }",
-        "Write-Host 'Optimizer template found: {{user `optimizer_template`}}'",
-        "Write-Host 'Downloads complete.'"
+      "script": "../../../packer/scripts/provisioners/get-installers.ps1",
+      "environment_vars": [
+        "VDA_URL={{user `vda_blob_url`}}",
+        "VDA_PATH={{user `vda_location`}}",
+        "VDA_SHA256={{user `vda_sha256`}}",
+        "VDA_SIGNER={{user `vda_signer`}}",
+        "OPTIMIZER_URL={{user `optimizer_blob_url`}}",
+        "OPTIMIZER_PATH={{user `optimizer_location`}}",
+        "OPTIMIZER_SHA256={{user `optimizer_sha256`}}",
+        "OPTIMIZER_TEMPLATE={{user `optimizer_template`}}"
       ]
     },
     {

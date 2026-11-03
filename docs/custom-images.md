@@ -339,11 +339,16 @@ Download the VDA installer and Citrix Optimizer from [Citrix Downloads](https://
 ```powershell
 .\packer\scripts\powershell\01-upload-installers.ps1 `
     -StorageAccount flexpackerbuild `
-    -VdaPath C:\Downloads\VDASetup.exe `
+    -VdaPath C:\Downloads\VDAServerSetup_2507.exe `
     -OptimizerPath C:\Downloads\CitrixOptimizer.zip
 ```
 
-The script prints plain blob URLs (`vda_blob_url`, `optimizer_blob_url`) to paste into your Packer variables file. There is no SAS and no expiry: the build VM downloads the installers with its user-assigned managed identity (`managed_identity_id`, from Step 1).
+The installers keep their file names in storage (`VDAServerSetup_2507.exe`), so each version stays side by side and you can always tell which VDA a build used. The script prints four values to paste into your Packer variables file:
+
+- `vda_blob_url` and `optimizer_blob_url`: plain blob URLs. There is no SAS and no expiry: the build VM downloads the installers with its user-assigned managed identity (`managed_identity_id`, from Step 1).
+- `vda_sha256` and `optimizer_sha256`: each file's SHA-256, also stored as blob metadata. The build VM checks both downloads against them before installing anything (see [What the build verifies and records](#what-the-build-verifies-and-records)).
+
+It also lists the Optimizer templates in your zip, for `optimizer_template`.
 
 > **Note:** `--auth-mode login` uploads need a data-plane role on the storage account for the signed-in user (Storage Blob Data Contributor). Owner or Contributor alone is not enough.
 
@@ -362,6 +367,8 @@ cp packer/variables/win_server_2025.json.example packer/variables/win_server_202
 ```
 
 Leave `vda_location` and `optimizer_location` out: they are the download paths *on the build VM* and the template defaults are correct.
+
+`vda_sha256` and `optimizer_sha256` are required: the build stops without them. `vda_signer` (default `Citrix Systems, Inc.`) is the organization the VDA installer's signature must come from. Leave `image_version` at `latest`: the build script resolves it to the exact marketplace version and records it.
 
 Leave `userpass` out. Packer generates a one-time WinRM password for each build VM and filters it from its logs, so there's no password to store.
 
@@ -470,6 +477,36 @@ SharedImageGalleryImageVersion: 1.0.0
 ```
 
 Bump `gallery_image_version` in your vars file for every build: a published version cannot be overwritten.
+
+#### What the build verifies and records
+
+**Before installing anything**, the build VM checks what it downloaded (`packer/scripts/provisioners/get-installers.ps1`):
+
+- **Hashes:** the VDA installer and the Optimizer zip must match `vda_sha256` and `optimizer_sha256`.
+- **Signature:** the VDA installer's Authenticode signature must be `Valid`, from `O=Citrix Systems, Inc.` (`vda_signer`).
+- **Optimizer template:** `optimizer_template` must exist in the zip.
+
+Any failure stops the build. It downloads with `curl.exe` and logs each download's time and speed.
+
+**Pinned inputs**, so two builds from the same commit and vars file get the same parts:
+
+| Input | Pinned to | Change it with |
+|---|---|---|
+| citrix-packer-tools (VDA, Optimizer and cleanup scripts) | the commit this repo was last validated with | `-PackerToolsRef <commit or tag>` |
+| Marketplace image | `latest` resolved to an exact version before the build | `image_version` in the vars file |
+| Packer plugins | azure v2.6.5, windows-update v0.18.5 | the script (legacy JSON uses the newest installed plugin, so the script warns if that isn't the pinned one) |
+| Chocolatey | 2.7.4 | the script |
+
+**The build record.** After a successful build (and only then), `02-build.ps1` writes `build-records/<image>-<version>.json` with:
+- the installers' names, hashes, signer and thumbprint;
+- the exact base image version and the citrix-packer-tools commit;
+- the Windows updates installed and those excluded;
+- the apps with versions;
+- the OS build, and the build VM's Secure Boot and TPM state;
+- the download times;
+- the Packer and plugin versions.
+
+It uploads a copy to the `build-records` container of your storage account, and tags the gallery version with the key fields (`vda`, `vdaSha256`, `baseImage`, `packerTools`, `buildRecord`). The full Packer log sits next to it in `build-records/`.
 
 #### What Packer does internally
 
