@@ -24,6 +24,13 @@ $ErrorActionPreference = "Stop"
 if (-not (Test-Path $VdaPath))       { Write-Error "VDA installer not found: $VdaPath" }
 if (-not (Test-Path $OptimizerPath)) { Write-Error "Citrix Optimizer not found: $OptimizerPath" }
 
+# optimizer_template in the vars file must be one of these exact names; the build stops otherwise.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $OptimizerPath).Path)
+$optimizerTemplates = @($zip.Entries | Where-Object { $_.FullName -match '^Templates[\\/][^\\/]+\.xml$' } | ForEach-Object { $_.Name } | Sort-Object)
+$zip.Dispose()
+if (-not $optimizerTemplates) { Write-Error "No Templates\*.xml found in $OptimizerPath. Is it the Citrix Optimizer zip?" }
+
 Write-Host "`nUploading VDA installer..."
 az storage blob upload `
     --account-name $StorageAccount --auth-mode login `
@@ -44,5 +51,7 @@ $optUrl = "https://$StorageAccount.blob.core.windows.net/$Container/CitrixOptimi
 Write-Host "`n--- Paste these into your vars file ---"
 Write-Host "vda_blob_url       = `"$vdaUrl`""
 Write-Host "optimizer_blob_url = `"$optUrl`""
+Write-Host "optimizer_template = one of these, exactly as written:"
+$optimizerTemplates | ForEach-Object { Write-Host "  $_" }
 Write-Host ""
 Write-Host "No expiry — the Packer build VM authenticates via managed identity at runtime."
