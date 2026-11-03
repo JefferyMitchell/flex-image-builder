@@ -163,6 +163,16 @@ optimizer_template 'Citrix_Windows_Server_2025.xml' is not in the Citrix Optimiz
 
 ---
 
+## A build keeps installing the same update
+
+**Symptom:** during the Windows Update stage, the log shows the same update installed again after every reboot, a few minutes apart, and the build never moves on to the VDA install.
+
+**Cause:** some updates are offered again even after they install. **KB5007651** (the Defender "Windows Security platform" update) does this, so `02-build.ps1` always excludes it, along with Preview updates.
+
+**Fix:** stop the build and add the looping update with `-WindowsUpdateExclude`, for example `-WindowsUpdateExclude KB5012170`. It takes a KB number or any text from the update's title.
+
+---
+
 ## A build fails or hangs: getting into the build VM
 
 **Background:** each build VM gets a one-time WinRM password. Packer generates it, never writes it anywhere and filters it from its logs, so there's no standing credential to leak. That also means there's no password for *you*. When a build fails or hangs, use the steps below instead. Each one leaves the build VM's image untouched until step 3.

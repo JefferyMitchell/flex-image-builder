@@ -436,7 +436,15 @@ With `virtual_network_name` set, `02-build.ps1` runs a private-network build:
 
 Run `02-build.ps1` from the machine inside the network. Steps 1, 2, 5 and 6 can still run from your workstation, because they only call Azure and Citrix Cloud APIs.
 
-Build time is approximately 40–50 minutes. The build script clones `citrix-packer-tools` automatically if not present.
+Build time is about 1 hour, plus 30–60 minutes for Windows Update depending on how far behind the marketplace image is. The build script clones `citrix-packer-tools` automatically if not present.
+
+#### Windows Update
+
+`02-build.ps1` installs Windows updates **before anything else**, so the VDA and apps go onto a patched OS. It renders a temporary copy of the template with a [`windows-update`](https://github.com/rgl/packer-plugin-windows-update) provisioner (plugin v0.18.5, installed by the script) as the first step:
+
+- **Excluded:** Preview updates, and **KB5007651** (the Defender "Windows Security platform" update). KB5007651 is offered again after every install, so without the exclusion the provisioner loops indefinitely: six install-and-reboot cycles about three minutes apart before we stopped it.
+- **`-WindowsUpdateExclude KB…`** adds exclusions, by KB number or title text, if another update loops or breaks a build.
+- **`-SkipWindowsUpdate`** leaves it out. Use it only for quick test builds; an image for users should be patched.
 
 At completion Packer outputs the gallery image version it published:
 
@@ -451,11 +459,11 @@ Bump `gallery_image_version` in your vars file for every build: a published vers
 
 Understanding the build sequence prevents the "wrong VHD" mistake:
 
-1. Creates a temporary resource group and deploys a VM from the marketplace image
-2. Runs all provisioners (VDA install, restart, VDA install phase 2, Ngen, Optimizer, Chrome, cleanup)
+1. Deploys a VM from the marketplace image into the build resource group
+2. Installs Windows updates (unless `-SkipWindowsUpdate`), then runs the template's provisioners (VDA install, restart, VDA install phase 2, Ngen, Optimizer, Chrome, cleanup)
 3. **Powers off the VM**
 4. **Publishes the OS disk (and its VM guest state) straight into the gallery image version.** With `"specialized": true` Packer skips the Generalize call, so the disk stays non-sysprepped — the state Citrix MCS needs
-5. Deletes the temporary resource group
+5. Deletes the build VM and its temporary resources
 
 ---
 
