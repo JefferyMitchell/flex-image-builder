@@ -174,7 +174,7 @@ The `guest_disk_uri` field in `citrix_quickdeploy_template_image` is optional in
 
 ### How it works
 
-When `security_type = "TrustedLaunch"` is set in the Packer builder, the build VM is provisioned as a Trusted Launch VM. Azure stores both the OS disk data and the VM Guest State (the Secure Boot key database and vTPM state) linked to the OS disk snapshot.
+When `security_type = "TrustedLaunch"` is set in the Packer builder, the build VM is provisioned as a Trusted Launch VM. The templates also set `secure_boot_enabled` and `vtpm_enabled` to `true`: with `security_type` alone, the plugin creates a Trusted Launch VM with **both turned off**, so the image would be built and captured on a VM that never booted with Secure Boot. Azure stores both the OS disk data and the VM Guest State (the Secure Boot key database and vTPM state) linked to the OS disk snapshot.
 
 The `az snapshot grant-access` command supports a `--security-data-access-level Read` flag. When the snapshot was created from a Trusted Launch VM, this returns both an `accessSAS` (for the OS disk) and a `securityDataAccessSAS` (for the VMGS data) in a single call. The export script uses AzCopy to copy both blobs to storage and generates individual read SAS URIs for each.
 

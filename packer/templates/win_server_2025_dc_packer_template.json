@@ -68,6 +68,8 @@
     "image_sku":        "2025-datacenter-g2",
     "image_version":    "latest",
     "security_type":    "TrustedLaunch",
+    "secure_boot_enabled": true,
+    "vtpm_enabled":     true,
 
     "communicator":    "winrm",
     "winrm_use_ssl":   true,
