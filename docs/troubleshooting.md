@@ -149,6 +149,20 @@ ERROR:   -> RequestDisallowedByPolicy : Resource 'pkrip…' was disallowed by po
 
 ---
 
+## A build fails after the download: optimizer_template is not in the zip
+
+**Symptom:** about the time `Downloads complete.` would print, the build stops with:
+
+```
+optimizer_template 'Citrix_Windows_Server_2025.xml' is not in the Citrix Optimizer zip, so the image would not be optimized. Templates in this zip: Citrix_Windows_10_1607.xml, …
+```
+
+**Cause:** `optimizer_template` must match a file in the zip's `Templates` folder exactly, and the names carry a build suffix (`Citrix_Windows_Server_2025_2009.xml`). Before this check existed, the Optimizer step reported success on a wrong name, and the image was published without being optimized.
+
+**Fix:** copy one of the names from the error, or from the list `01-upload-installers.ps1` prints, into your vars file and run the build again. See [Optimizer template names](custom-images.md#optimizer-template-names).
+
+---
+
 ## A build fails or hangs: getting into the build VM
 
 **Background:** each build VM gets a one-time WinRM password. Packer generates it, never writes it anywhere and filters it from its logs, so there's no standing credential to leak. That also means there's no password for *you*. When a build fails or hangs, use the steps below instead. Each one leaves the build VM's image untouched until step 3.

@@ -12,7 +12,7 @@
   "managed_identity_id":    "<managed_identity_id, from 00-setup-azure.ps1>",
   "vda_blob_url":           "https://<storage-account>.blob.core.windows.net/installers/VDASetup.exe",
   "optimizer_blob_url":     "https://<storage-account>.blob.core.windows.net/installers/CitrixOptimizer.zip",
-  "optimizer_template":     "Citrix_Windows_Server_2025.xml",
+  "optimizer_template":     "Citrix_Windows_Server_2025_2009.xml",
 
   "winrm_insecure":         "true",
   "allowed_inbound_ip":     "<your egress IP>/32",
