@@ -134,6 +134,21 @@ terraform init -upgrade
 
 ---
 
+## A build fails within a minute: policy violation
+
+**Symptom:** `02-build.ps1` stops shortly after `Deploying deployment template...` with:
+
+```
+ERROR: -> InvalidTemplateDeployment : The template deployment failed because of policy violation.
+ERROR:   -> RequestDisallowedByPolicy : Resource 'pkrip…' was disallowed by policy. Policy identifiers: '[{"policyAssignment":{"name":"…"
+```
+
+**Cause:** an Azure Policy assignment denies a resource the build creates. The second line names both the resource and the policy assignment. A `pkrip…` resource is the build VM's **public IP**, and enterprise landing zones commonly deny public IPs on every subscription.
+
+**Fix:** if it's the public IP, switch to a [private-network build](custom-images.md#private-network-builds-no-public-ip) instead of asking for an exemption. For anything else (for example, required tags, or allowed VM sizes or regions), match the policy in your vars file or template.
+
+---
+
 ## A build fails or hangs: getting into the build VM
 
 **Background:** each build VM gets a one-time WinRM password. Packer generates it, never writes it anywhere and filters it from its logs, so there's no standing credential to leak. That also means there's no password for *you*. When a build fails or hangs, use the steps below instead. Each one leaves the build VM's image untouched until step 3.
@@ -143,7 +158,7 @@ terraform init -upgrade
 - **A failing build** deletes its VM by default. Re-run it with `-KeepOnError` (Packer's `-on-error=abort`), and the VM and its resources stay in the build resource group.
 - **A hung build** (for example, stuck at `Waiting for WinRM` or at a provisioner) still has its VM. **Don't press Ctrl-C yet**, because that starts the cleanup.
 
-The build VM is named `pkrvm<random>`. Its NIC, public IP, network security group, Key Vault and OS disk are named `pkrni…`, `pkrip…`, `pkrsg…`, `pkrkv…` and `pkros…`.
+The build VM is named `pkrvm<random>`. Its NIC, Key Vault and OS disk are named `pkrni…`, `pkrkv…` and `pkros…`. A public-network build also has a public IP, network security group and VNet, named `pkrip…`, `pkrsg…` and `pkrvn…`. A [private-network build](custom-images.md#private-network-builds-no-public-ip) uses your subnet instead.
 
 ```powershell
 az vm list -g rg-flex-packer-build --query "[?starts_with(name,'pkrvm')].name" -o tsv
@@ -190,6 +205,8 @@ If you need a desktop session:
        --source-address-prefixes "<your egress IP>/32" --destination-port-ranges 3389
    ```
 3. **Connect.** RDP to the `pkrip…` public IP as `packer`, using Microsoft Remote Desktop / Windows App on macOS.
+
+**On a private-network build** there's no public IP and no `pkrsg…` group, so skip step 2. Instead, RDP to the build VM's private IP from a machine inside the network, or connect through Azure Bastion. Your subnet's network security group must allow 3389 from that machine; that rule belongs to your network team.
 
 **Rules for break-glass access:**
 

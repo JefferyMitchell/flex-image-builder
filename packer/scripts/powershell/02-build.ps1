@@ -22,8 +22,8 @@ param(
     [string]$VdaVersion = "v2507",
 
     # CIDR allowed to reach the build VM's WinRM port (e.g. your egress IP as x.x.x.x/32).
-    # Overrides allowed_inbound_ip in the vars file. Without either, the build stops:
-    # Packer would otherwise open WinRM on the build VM to the whole internet.
+    # Public-network builds only. Overrides allowed_inbound_ip in the vars file. Without either,
+    # the build stops: Packer would otherwise open WinRM on the build VM to the whole internet.
     [string]$AllowedInboundIp,
 
     # Leave the build VM and its resources in place if the build fails (packer -on-error=abort),
@@ -53,14 +53,31 @@ if ("$($vars.use_azure_cli_auth)" -ne "false") {
     Write-Host "Packer will authenticate as $($account.user) (subscription: $($account.sub))."
 }
 
-# Network: the build VM has a public IP for WinRM. Restrict who can reach it.
-if (-not $AllowedInboundIp) { $AllowedInboundIp = "$($vars.allowed_inbound_ip)" }
-if (-not $AllowedInboundIp -or $AllowedInboundIp -like "<*") {
-    Write-Error ("Set -AllowedInboundIp (or allowed_inbound_ip in the vars file) to the CIDR your traffic leaves from, " +
-                 "e.g. 203.0.113.10/32. Find it with: Invoke-RestMethod https://api.ipify.org (or ask your network team). " +
-                 "Use 0.0.0.0/0 only if you accept WinRM being reachable from anywhere during the build.")
+# Network. The vars file picks the mode:
+#  - private: virtual_network_name is set. The build VM joins that existing subnet with a private IP
+#    only, so this script must run on a machine that can reach the subnet on WinRM (5986).
+#    Use it where policy forbids public IPs, as most enterprise landing zones do.
+#  - public (default): Packer creates a temporary VNet and gives the build VM a public IP.
+$vnetName = "$($vars.virtual_network_name)"
+$privateNetwork = [bool]$vnetName
+if ($privateNetwork) {
+    if (-not $vars.virtual_network_subnet_name -or -not $vars.virtual_network_resource_group_name) {
+        Write-Error "virtual_network_name is set: also set virtual_network_subnet_name and virtual_network_resource_group_name in the vars file."
+    }
+    if ($AllowedInboundIp) { Write-Warning "-AllowedInboundIp is ignored: private-network builds create no public IP." }
+    Write-Host ("Network: private. The build VM gets a private IP in $vnetName/$($vars.virtual_network_subnet_name) " +
+                "and no public IP. This machine must reach that subnet on port 5986.")
+} else {
+    # The build VM has a public IP for WinRM. Restrict who can reach it.
+    if (-not $AllowedInboundIp) { $AllowedInboundIp = "$($vars.allowed_inbound_ip)" }
+    if (-not $AllowedInboundIp -or $AllowedInboundIp -like "<*") {
+        Write-Error ("Set -AllowedInboundIp (or allowed_inbound_ip in the vars file) to the CIDR your traffic leaves from, " +
+                     "e.g. 203.0.113.10/32. Find it with: Invoke-RestMethod https://api.ipify.org (or ask your network team). " +
+                     "Use 0.0.0.0/0 only if you accept WinRM being reachable from anywhere during the build. " +
+                     "If policy forbids public IPs, use a private-network build instead (set virtual_network_name).")
+    }
+    Write-Host "Network: public. WinRM on the build VM will accept connections only from $AllowedInboundIp."
 }
-Write-Host "WinRM on the build VM will accept connections only from $AllowedInboundIp."
 
 # Clone citrix-packer-tools if not present (needed for provisioner scripts)
 $packerToolsDir = Join-Path $repoRoot "citrix-packer-tools"
@@ -91,6 +108,19 @@ Write-Host "  Scripts  : $versionDir"
 Write-Host "  Vars     : $varsFilePath"
 Write-Host ""
 
+$template   = $patchedTemplate
+$packerArgs = @()
+if ($privateNetwork) {
+    # Packer refuses allowed_inbound_ip_addresses together with virtual_network_name, so build
+    # from a temporary copy of the template without it.
+    $t = Get-Content $patchedTemplate -Raw | ConvertFrom-Json
+    foreach ($b in $t.builders) { $b.PSObject.Properties.Remove("allowed_inbound_ip_addresses") }
+    $template = Join-Path ([System.IO.Path]::GetTempPath()) "${Os}_private_network_$PID.json"
+    [System.IO.File]::WriteAllText($template, ($t | ConvertTo-Json -Depth 32))
+} else {
+    $packerArgs += "-var", "allowed_inbound_ip=$AllowedInboundIp"
+}
+
 Push-Location $versionDir
 try {
     $onError = if ($KeepOnError) { "-on-error=abort" } else { "-on-error=cleanup" }
@@ -98,10 +128,11 @@ try {
         Write-Host "KeepOnError: on failure the build VM (pkrvm*) and its resources stay in the build resource group."
         Write-Host "Troubleshoot, then clean up: see 'A build fails or hangs' in docs/troubleshooting.md."
     }
-    packer build $onError -var-file="$varsFilePath" -var "allowed_inbound_ip=$AllowedInboundIp" "$patchedTemplate"
+    packer build $onError -var-file="$varsFilePath" @packerArgs "$template"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location
+    if ($template -ne $patchedTemplate) { Remove-Item $template -ErrorAction SilentlyContinue }
 }
 
 Write-Host "`nBuild complete. Run 04-export-from-gallery.ps1 to export the OS VHD (+ VMGS) and get the SAS URIs for Terraform."

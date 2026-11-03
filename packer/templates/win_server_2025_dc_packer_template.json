@@ -34,6 +34,9 @@
     "script_cleanup":        "run-cleanup.ps1",
 
     "allowed_inbound_ip": "",
+    "virtual_network_name": "",
+    "virtual_network_subnet_name": "",
+    "virtual_network_resource_group_name": "",
 
     "username": "packer",
     "userpass": "",
@@ -76,6 +79,9 @@
     "user_assigned_managed_identities": ["{{user `managed_identity_id`}}"],
 
     "allowed_inbound_ip_addresses": ["{{user `allowed_inbound_ip`}}"],
+    "virtual_network_name": "{{user `virtual_network_name`}}",
+    "virtual_network_subnet_name": "{{user `virtual_network_subnet_name`}}",
+    "virtual_network_resource_group_name": "{{user `virtual_network_resource_group_name`}}",
 
     "azure_tags": {
       "Image": "Packer Generated"
