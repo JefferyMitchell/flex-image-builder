@@ -149,9 +149,25 @@ ERROR:   -> RequestDisallowedByPolicy : Resource 'pkrip…' was disallowed by po
 
 ---
 
+## A build fails after the download: hash or signature check
+
+**Symptom:** the build stops with one of these, before the VDA install:
+- `SHA-256 mismatch for <file>: expected …, got …`
+- `vda_sha256 isn't set to a SHA-256 hash`
+- `The VDA installer's signature isn't valid`
+- `The VDA installer is signed by '…', not by O=Citrix Systems, Inc.`
+
+**Cause:**
+- **A hash mismatch** means the blob in storage isn't the file whose hash is in your vars file. Usually a different installer was uploaded under the same name.
+- **A signature failure** means the file isn't an intact Citrix-signed installer.
+
+**Fix:** download the installer again from Citrix, run `01-upload-installers.ps1`, and paste the hashes it prints into your vars file. Don't loosen `vda_signer` to make a build pass.
+
+---
+
 ## A build fails after the download: optimizer_template is not in the zip
 
-**Symptom:** about the time `Downloads complete.` would print, the build stops with:
+**Symptom:** right after the installer download, before the VDA install, the build stops with:
 
 ```
 optimizer_template 'Citrix_Windows_Server_2025.xml' is not in the Citrix Optimizer zip, so the image would not be optimized. Templates in this zip: Citrix_Windows_10_1607.xml, …

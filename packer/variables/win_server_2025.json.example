@@ -8,10 +8,13 @@
   "gallery_name":           "FlexPackerGallery",
   "gallery_image_name":     "WinServer2025DC",
   "location":               "eastus",
+  "image_version":          "latest",
 
   "managed_identity_id":    "<managed_identity_id, from 00-setup-azure.ps1>",
-  "vda_blob_url":           "https://<storage-account>.blob.core.windows.net/installers/VDASetup.exe",
+  "vda_blob_url":           "https://<storage-account>.blob.core.windows.net/installers/VDAServerSetup_2507.exe",
+  "vda_sha256":             "<SHA-256, from 01-upload-installers.ps1>",
   "optimizer_blob_url":     "https://<storage-account>.blob.core.windows.net/installers/CitrixOptimizer.zip",
+  "optimizer_sha256":       "<SHA-256, from 01-upload-installers.ps1>",
   "optimizer_template":     "Citrix_Windows_Server_2025_2009.xml",
 
   "winrm_insecure":         "true",
