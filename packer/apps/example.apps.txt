@@ -1,0 +1,8 @@
+# App list for 02-build.ps1 -AppsFile: Chocolatey package IDs, one per line.
+# '#' starts a comment. "id version" pins a version; without one, the newest version at build time is
+# installed, and the build log lists what went in ("installed-app:" lines).
+# Find IDs with "choco search <name>" or at https://community.chocolatey.org/packages
+# Chrome isn't here: the template installs it (install_browser_chrome_flag).
+notepadplusplus
+7zip
+adobereader
