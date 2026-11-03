@@ -446,6 +446,22 @@ Build time is about 1 hour, plus 30–60 minutes for Windows Update depending on
 - **`-WindowsUpdateExclude KB…`** adds exclusions, by KB number or title text, if another update loops or breaks a build.
 - **`-SkipWindowsUpdate`** leaves it out. Use it only for quick test builds; an image for users should be patched.
 
+#### Apps (optional)
+
+Pass an app list to install apps into the image:
+
+```powershell
+.\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -AppsFile example.apps.txt
+```
+
+- **The list** is a text file of [Chocolatey](https://community.chocolatey.org/packages) package IDs, one per line. `#` starts a comment, and `id version` pins a version. Start from [`packer/apps/example.apps.txt`](../packer/apps/example.apps.txt); keep one list per image or persona.
+- **When it runs:** after the template's own steps (VDA, Optimizer, browsers) and just before cleanup, followed by a restart, because some installers need one.
+- **Failures stop the build.** Exit codes 0, 1641 and 3010 pass; anything else fails the build and names the package.
+- **What went in:** the build log lists every installed package and version (`installed-app:` lines). Pin versions in the list when you need a build to be repeatable.
+- **Chocolatey itself** is bootstrapped at a pinned version (2.7.4) from community.chocolatey.org.
+- **Internal feed:** `-ChocoSource <url>` installs the packages from your own feed and disables the community source.
+- **Why not winget:** its community source fails to initialize in Packer's unattended WinRM session (`0x8a15000f`, "Data required by the source is missing"), even after bootstrapping App Installer.
+
 At completion Packer outputs the gallery image version it published:
 
 ```
