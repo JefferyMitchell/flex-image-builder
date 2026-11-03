@@ -106,8 +106,10 @@ $msi = (az identity create `
 # Scope to the installers container only — principle of least privilege.
 $containerScope = "/subscriptions/$SubscriptionId/resourceGroups/$rg/providers/Microsoft.Storage/storageAccounts/$sa/blobServices/default/containers/installers"
 Write-Host "Assigning Storage Blob Data Reader to managed identity on installers container..."
+# By object ID, so az doesn't need Graph to resolve the identity (it warns, or fails, where you can't read the directory).
 az role assignment create `
-    --assignee $msi.principalId `
+    --assignee-object-id $msi.principalId `
+    --assignee-principal-type ServicePrincipal `
     --role "Storage Blob Data Reader" `
     --scope $containerScope | Out-Null
 
