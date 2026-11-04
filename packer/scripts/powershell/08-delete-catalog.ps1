@@ -18,6 +18,7 @@
 #   $env:TF_VAR_domain_service_account_password = "<join account password>"   # same variable Terraform uses
 #   .\08-delete-catalog.ps1 -CatalogName "Task Worker Desktop" -WhatIf      # show what would happen
 #   .\08-delete-catalog.ps1 -CatalogName "Task Worker Desktop"              # asks to confirm
+#   .\08-delete-catalog.ps1 -CatalogName "Task Worker Desktop" -Confirm:$false   # unattended (pipelines, scripts)
 #
 # The service account defaults to the one the catalog was created with (domainServiceAccount).
 # The password is read only from the environment variable named by -PasswordVariable, and never printed.
@@ -84,7 +85,12 @@ if ($status.state -eq "NotFound") {
 
     if ($status.state -eq "Deleting") {
         Write-Host "`nA delete is already running; waiting for it."
-    } elseif ($PSCmdlet.ShouldProcess("$($catalog.name) ($CatalogId) and its machines", "Delete catalog")) {
+    } elseif (& {
+        # Without a console to answer the prompt (a pipeline, Run Command, ssh without a tty), PowerShell
+        # fails with "Object reference not set to an instance of an object". Say what to do instead.
+        try { $PSCmdlet.ShouldProcess("$($catalog.name) ($CatalogId) and its machines", "Delete catalog") }
+        catch { Write-Error "Can't ask for confirmation in this session ($($_.Exception.Message)). To delete without asking, add -Confirm:`$false." }
+    }) {
         if ($status.state -eq "Error") { Write-Host "`nThe catalog is in Error (often a failed delete); sending the credentialed delete again." }
         Write-Host "`nDeleting..."
         # Content-Type: application/json is set on every request; without it this call returns 415.
