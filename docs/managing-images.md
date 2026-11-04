@@ -144,6 +144,34 @@ Builds are repeatable because their inputs are pinned:
 
 ---
 
+## Reaching catalog machines from your network
+
+Machines on Citrix-managed capacity accept **nothing inbound** from your network by default, not even from the network peered with them. To check an image from inside (Secure Boot, TPM, installed apps), run an agent, or troubleshoot, open a port on the network connection, and close it when you're done:
+
+```powershell
+.\packer\scripts\powershell\09-network-rule.ps1 -Connection <connection name>                     # list rules
+.\packer\scripts\powershell\09-network-rule.ps1 -Connection <connection name> -Open 5985 -Name winrm-check
+.\packer\scripts\powershell\09-network-rule.ps1 -Connection <connection name> -Close 5985
+```
+
+This is the same as **Quick Deploy → Microsoft Azure → Network connections → your connection → Security rules** in Web Studio. Know the limits before you open anything:
+
+- **A rule can't be limited to one address.** Its source is always the `VirtualNetwork` service tag: the Citrix-managed network and every network peered with it.
+- **It applies to every machine on the connection**, in every catalog that uses it.
+- **Allow only, ports 1–49151.** 20–21, 22, 23 and 3389 can't be opened.
+- **About 3 minutes to take effect**, and about as long to go away.
+
+With TCP 5985 open, a domain admin can check a machine from a domain controller or a management server in the peered network:
+
+```powershell
+Invoke-Command -ComputerName <machine> -ScriptBlock {
+    Confirm-SecureBootUEFI; Get-Tpm | Select-Object TpmPresent, TpmReady
+    Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | Where-Object DisplayName | Select-Object DisplayName, DisplayVersion
+}
+```
+
+**Check that the machine is on first.** Autoscale powers catalog machines off outside peak hours, and a machine that's off looks exactly like a closed port.
+
 ## Several images
 
 - Run each image from its own vars file (its own `gallery_image_name`, versions and installers) and its own app list.

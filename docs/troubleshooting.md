@@ -203,6 +203,21 @@ optimizer_template 'Citrix_Windows_Server_2025.xml' is not in the Citrix Optimiz
 
 ---
 
+## Can't reach a catalog machine from your network
+
+**Symptom:** from a server in the network peered with Citrix-managed capacity, a catalog machine doesn't answer on any port (WinRM, SMB, RDP, ping).
+
+**Cause:**
+- **Machines on Citrix-managed capacity accept nothing inbound by default.** Only Citrix's own system ports are open.
+- **Or the machine is off.** Autoscale powers machines off outside peak hours, and a powered-off machine looks the same as a blocked port.
+
+**Fix:**
+1. Check the machine's power state in Web Studio (or `GET /cvad/manage/Machines`), and start it if needed.
+2. Open the port you need with `09-network-rule.ps1` (see [Reaching catalog machines from your network](managing-images.md#reaching-catalog-machines-from-your-network)), wait about 3 minutes, and test again.
+3. Close the port when you're done.
+
+---
+
 ## A build fails or hangs: getting into the build VM
 
 **Background:** each build VM gets a one-time WinRM password. Packer generates it, never writes it anywhere and filters it from its logs, so there's no standing credential to leak. That also means there's no password for *you*. When a build fails or hangs, use the steps below instead. Each one leaves the build VM's image untouched until step 3.
