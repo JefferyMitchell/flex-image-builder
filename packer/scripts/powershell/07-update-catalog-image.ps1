@@ -14,10 +14,11 @@
 # Usage:
 #   $env:CITRIX_CUSTOMER_ID / CITRIX_CLIENT_ID / CITRIX_CLIENT_SECRET as for 06-import-to-citrix.ps1
 #   .\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id> -CheckOnly
-#   .\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id>
+#   .\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id> -VdaUpdateDelay 60
 #
-# -VdaUpdateDelay (minutes) sets when machines restart onto the new image:
-#   0 = restart all machines now (default; sessions on them end), -1 = at each machine's next shutdown,
+# -VdaUpdateDelay (minutes) sets when machines restart onto the new image. It has no default, because
+# the update can end users' sessions; only -CheckOnly can leave it out:
+#   0 = restart all machines now (sessions on them end), -1 = at each machine's next shutdown,
 #   N = spread the restarts over N minutes, warning users first.
 
 [CmdletBinding(DefaultParameterSetName = "ByName")]
@@ -28,7 +29,7 @@ param(
     # The image to move the catalog to (from 06-import-to-citrix.ps1).
     [Parameter(Mandatory)] [string]$ImageId,
 
-    [ValidateRange(-1, 10080)] [int]$VdaUpdateDelay = 0,
+    [ValidateRange(-1, 10080)] [int]$VdaUpdateDelay,
 
     # Run the checks and stop. Makes no changes.
     [switch]$CheckOnly,
@@ -49,6 +50,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $CheckOnly -and -not $PSBoundParameters.ContainsKey("VdaUpdateDelay")) {
+    throw "Choose when machines restart: -VdaUpdateDelay 0 (all now; sessions end), -1 (each machine's next shutdown) or N (spread over N minutes, warning users first). Nothing was changed."
+}
 . (Join-Path $PSScriptRoot "citrix-api.ps1")
 
 Write-Host "`nConnecting to Citrix Cloud..."
@@ -134,7 +138,7 @@ if ($problems.Count) {
 Write-Host "  OK    image Ready, session type, flags$(if (-not $isStatic) { ', not a static catalog' })"
 
 if ($CheckOnly) {
-    Write-Host "`n-CheckOnly: no changes made. Run again without -CheckOnly to update the catalog."
+    Write-Host "`n-CheckOnly: no changes made. Run again with -VdaUpdateDelay instead of -CheckOnly to update the catalog."
     exit 0
 }
 

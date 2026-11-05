@@ -725,7 +725,7 @@ Run the checks first. `-CheckOnly` makes no changes:
 
 ```powershell
 .\packer\scripts\powershell\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id> -CheckOnly
-.\packer\scripts\powershell\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id>
+.\packer\scripts\powershell\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id> -VdaUpdateDelay 60
 ```
 
 **Pre-checks.** The script stops, and changes nothing, unless all of these hold:
@@ -735,11 +735,11 @@ Run the checks first. `-CheckOnly` makes no changes:
 - its `hyperVGen`, `vtpmEnabled` and `secureBootEnabled` match the catalog's **current image**. A mismatch is the silent revert described under [Updating an Image](#updating-an-image);
 - the catalog isn't static (dedicated) single-session. Those machines are re-provisioned and users lose their disks; `-Force` overrides this check only.
 
-**The update** is `POST .../catalogs/{catalogId}/$updateImage` with `{"TemplateId": "<image id>", "CitrixPrepared": false, "VdaUpdateDelay": 0}`, in that exact casing. `CitrixPrepared` is `false` for an image you imported; the script takes it from the image. `-VdaUpdateDelay` sets when machines restart onto the new image:
+**The update** is `POST .../catalogs/{catalogId}/$updateImage` with `{"TemplateId": "<image id>", "CitrixPrepared": false, "VdaUpdateDelay": 0}`, in that exact casing. `CitrixPrepared` is `false` for an image you imported; the script takes it from the image. `-VdaUpdateDelay` sets when machines restart onto the new image. It has no default, so without it (or `-CheckOnly`) the script stops before it connects. The choices:
 
 | `-VdaUpdateDelay` | Machines restart |
 |---|---|
-| `0` (default) | now, all of them; sessions on them end |
+| `0` | now, all of them; sessions on them end |
 | `-1` | at each machine's next shutdown |
 | `N` | spread over N minutes, with a warning to users first |
 
