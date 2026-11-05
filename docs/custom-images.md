@@ -465,7 +465,7 @@ Pass an app list to install apps into the image:
 - **When it runs:** after the template's own steps (VDA, Optimizer, browsers) and just before cleanup, followed by a restart, because some installers need one.
 - **Failures stop the build.** Exit codes 0, 1641 and 3010 pass; anything else fails the build and names the package.
 - **What went in:** the build log lists every installed package and version (`installed-app:` lines). Pin versions in the list when you need a build to be repeatable.
-- **Chocolatey itself** is bootstrapped at a pinned version (2.7.4) from community.chocolatey.org.
+- **Chocolatey itself** is installed from its pinned release MSI (2.7.4). The build VM checks the MSI against a recorded SHA-256 and its Chocolatey Software signature before installing it, and stops on a mismatch. `-ChocoMsiUrl <url>` downloads the same file from your own mirror; the same checks apply. To upgrade, change `$chocoVersion` and `$chocoMsiSha256` in `02-build.ps1` together.
 - **Internal feed:** `-ChocoSource <url>` installs the packages from your own feed and disables the community source.
 - **Why not winget:** its community source fails to initialize in Packer's unattended WinRM session (`0x8a15000f`, "Data required by the source is missing"), even after bootstrapping App Installer.
 
