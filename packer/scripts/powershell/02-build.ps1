@@ -44,6 +44,9 @@ param(
     # Optional internal Chocolatey feed for the app installs; the community source is then disabled.
     [string]$ChocoSource,
 
+    # Optional mirror of the pinned Chocolatey MSI, for builds that can't reach GitHub. Its hash and signature are still checked.
+    [string]$ChocoMsiUrl,
+
     # citrix-packer-tools commit or tag to build with (its VDA, Optimizer and cleanup scripts), instead of
     # whatever is on main the day you build. The default is the commit this repo was last validated with.
     [string]$PackerToolsRef = "2d3a906959c3693ff7edbe51928b446f607eac44"
@@ -106,7 +109,9 @@ foreach ($k in 'vda_sha256', 'optimizer_sha256') {
 }
 
 # Apps (optional)
-$chocoVersion = "2.7.4"   # Chocolatey CLI bootstrapped on the build VM
+$chocoVersion = "2.7.4"   # Chocolatey CLI installed on the build VM. Change the version and the hash together.
+$chocoMsiSha256 = "f39efebdc012525a7057f573f136f63af91a496efddd1db4c7910d657a5ac407"   # asset digest on the chocolatey/choco GitHub release
+if (-not $ChocoMsiUrl) { $ChocoMsiUrl = "https://github.com/chocolatey/choco/releases/download/$chocoVersion/chocolatey-$chocoVersion.0.msi" }
 if ($AppsFile) {
     $appsFilePath = $AppsFile
     if (-not (Test-Path $appsFilePath)) { $appsFilePath = Join-Path $repoRoot "packer\apps\$AppsFile" }
@@ -194,7 +199,7 @@ if ($AppsFile) {
     if ("$($provisioners[$provisioners.Count - 1].inline)" -notmatch 'script_cleanup') {
         Write-Error "Unexpected template shape: the last provisioner isn't the cleanup step."
     }
-    $appEnv = @("CHOCO_VERSION=$chocoVersion")
+    $appEnv = @("CHOCO_VERSION=$chocoVersion", "CHOCO_MSI_URL=$ChocoMsiUrl", "CHOCO_MSI_SHA256=$chocoMsiSha256")
     if ($ChocoSource) { $appEnv += "CHOCO_SOURCE=$ChocoSource" }
     $appSteps = @(
         [pscustomobject][ordered]@{ type = "file"; source = $appsFilePath; destination = '{{user `location_setup`}}\apps.txt' }

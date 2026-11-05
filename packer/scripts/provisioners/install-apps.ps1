@@ -5,18 +5,39 @@
 # Why Chocolatey, not winget: winget's community source fails to initialize in unattended WinRM
 # sessions (0x8a15000f "Data required by the source is missing"), even after an App Installer bootstrap.
 #
-# Environment (set by 02-build.ps1): CHOCO_VERSION is the Chocolatey CLI version to bootstrap;
-# CHOCO_SOURCE is an optional internal feed, used instead of the community source.
+# Environment (set by 02-build.ps1): CHOCO_VERSION, CHOCO_MSI_URL and CHOCO_MSI_SHA256 identify the
+# Chocolatey release MSI to install; CHOCO_SOURCE is an optional internal feed, used instead of the
+# community source.
 $ErrorActionPreference = 'Stop'
 $manifest = 'c:\setup\apps.txt'
 if (-not (Test-Path $manifest)) { throw "App list not found: $manifest" }
 
+# The Chocolatey MSI must match its pinned SHA-256 and carry a valid Chocolatey Software signature.
+function Assert-ChocoMsi([string]$Path, [string]$ExpectedSha256) {
+    if ($ExpectedSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "CHOCO_MSI_SHA256 isn't a SHA-256 hash." }
+    $actual = (Get-FileHash $Path -Algorithm SHA256).Hash
+    if ($actual -ne $ExpectedSha256.ToUpperInvariant()) {
+        throw "SHA-256 mismatch for the Chocolatey MSI: expected $ExpectedSha256, got $actual. Not installing it."
+    }
+    $sig = Get-AuthenticodeSignature $Path
+    if ($sig.Status -ne 'Valid') { throw "The Chocolatey MSI's signature isn't valid ($($sig.Status)). Not installing it." }
+    # Windows quotes values that contain commas: O="Chocolatey Software, Inc"
+    if ($sig.SignerCertificate.Subject -notmatch '(^|, )O="?Chocolatey Software, Inc"?(,|$)') {
+        throw "The Chocolatey MSI is signed by '$($sig.SignerCertificate.Subject)', not Chocolatey Software. Not installing it."
+    }
+}
+
 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-    Write-Host "Bootstrapping Chocolatey $env:CHOCO_VERSION..."
-    $env:chocolateyVersion = $env:CHOCO_VERSION
-    Set-ExecutionPolicy Bypass -Scope Process -Force
+    Write-Host "Downloading Chocolatey $env:CHOCO_VERSION from $env:CHOCO_MSI_URL..."
+    $ProgressPreference = 'SilentlyContinue'
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+    $msi = Join-Path $env:TEMP "chocolatey-$env:CHOCO_VERSION.msi"
+    Invoke-WebRequest -Uri $env:CHOCO_MSI_URL -OutFile $msi -UseBasicParsing
+    Assert-ChocoMsi $msi $env:CHOCO_MSI_SHA256
+    Write-Host "Chocolatey MSI verified (SHA-256 and signature). Installing..."
+    $install = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+    if (@(0, 3010) -notcontains $install.ExitCode) { throw "Chocolatey MSI install failed (exit $($install.ExitCode))" }
+    Remove-Item $msi
     $env:Path = "$env:Path;$env:ProgramData\chocolatey\bin"
 }
 if ($env:CHOCO_SOURCE) {
