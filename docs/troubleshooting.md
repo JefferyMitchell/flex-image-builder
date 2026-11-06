@@ -213,8 +213,9 @@ optimizer_template 'Citrix_Windows_Server_2025.xml' is not in the Citrix Optimiz
 
 **Fix:**
 1. Check the machine's power state in Web Studio (or `GET /cvad/manage/Machines`), and start it if needed.
-2. Open the port you need in Web Studio (see [Reaching catalog machines from your network](managing-images.md#reaching-catalog-machines-from-your-network)), wait about 3 minutes, and test again.
-3. Close the port when you're done.
+2. See whether you can avoid opening a port, and set up the controls around it first (see [Reaching catalog machines from your network](managing-images.md#reaching-catalog-machines-from-your-network)).
+3. Open the port in Web Studio or with `09-network-rule.ps1`, wait about 3 minutes, and test again.
+4. Close the port when you're done, and confirm it's gone.
 
 ---
 

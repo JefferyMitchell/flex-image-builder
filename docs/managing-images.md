@@ -146,16 +146,57 @@ Builds are repeatable because their inputs are pinned:
 
 ## Reaching catalog machines from your network
 
-Machines on Citrix-managed capacity accept **nothing inbound** from your network by default, not even from the network peered with them. To check an image from inside (Secure Boot, TPM, installed apps), run an agent, or troubleshoot, open a port on the network connection in Web Studio, and close it when you're done: **Quick Deploy → Microsoft Azure → Network connections → your connection → Security rules**.
+Machines on Citrix-managed capacity accept **nothing inbound** from your network by default, not even from the network peered with them. Keep it that way where you can. Start without an open port, and if you need one, put the controls below around it.
 
-Know the limits before you open anything:
+> **Test this on a small catalog first.** These controls haven't all been validated on a live connection. A firewall policy that blocks the VDA's or Citrix's own traffic can take machines out of service.
+
+### Start without an open port
+
+| Need | Do this instead | Why it's safer |
+|---|---|---|
+| Check Secure Boot, TPM or apps | Check during the build, and read the build record | No access to running machines |
+| Check a live machine | Sign in through a Citrix session as a named admin | Access is per user, and your sign-in controls such as MFA apply |
+| Run an agent or manage machines | Use an outbound-only tool, such as an agent that reports out or pulls its tasks. Confirm with Citrix that it's allowed on managed machines | No inbound path |
+
+### What a rule can and can't limit
+
+A Security rule is a coarse control. Know its limits before you open anything:
 
 - **A rule can't be limited to one address.** Its source is always the `VirtualNetwork` service tag: the Citrix-managed network and every network peered with it.
 - **It applies to every machine on the connection**, in every catalog that uses it.
 - **Allow only, ports 1–49151.** 20–21, 22, 23 and 3389 can't be opened.
 - **About 3 minutes to take effect**, and about as long to go away.
 
-With TCP 5985 open, a domain admin can check a machine from a domain controller or a management server in the peered network:
+### Put these controls around an open port
+
+Set these up **before** you open the port. Together they provide the limits the rule can't.
+
+| Question | Control | Where it applies |
+|---|---|---|
+| Which source can connect? | Windows Firewall allows the port only from your jump host. This also limits traffic between machines inside the managed network | Each machine |
+| Which machines? | Group Policy applied by OU, so only one catalog's machines allow it | Each catalog |
+| Which networks can send it? | An NSG or firewall rule on your side, so only the jump host's subnet can reach the managed network | Your network |
+| Who can sign in? | A dedicated admin group, with time-limited membership (for example through PIM) | Identity |
+| What can they do? | Just Enough Administration (JEA), limiting them to approved commands | PowerShell session |
+| Is the connection protected? | WinRM over HTTPS (5986) where you can. Over 5985, the connection relies on Kerberos to encrypt its messages | Connection |
+| What happened? | Sign-in and PowerShell logs sent to your monitoring system | Audit |
+
+### Open the port, then close it
+
+Open the port only for the task. Use either of these:
+
+- **The console:** Quick Deploy → Microsoft Azure → Network connections → your connection → Security rules, in Web Studio.
+- **`09-network-rule.ps1`:**
+
+```powershell
+.\packer\scripts\powershell\09-network-rule.ps1 -Connection <connection name>                     # list rules
+.\packer\scripts\powershell\09-network-rule.ps1 -Connection <connection name> -Open 5985 -Name winrm-check
+.\packer\scripts\powershell\09-network-rule.ps1 -Connection <connection name> -Close 5985
+```
+
+> **The script's API routes aren't in Citrix's published reference, so they can change without notice.** If the script fails, use the console. If `-Close` fails, the port stays open until you close it there, so always list the rules afterwards and confirm it's gone.
+
+With TCP 5985 open, an admin from your dedicated group can check a machine from the jump host:
 
 ```powershell
 Invoke-Command -ComputerName <machine> -ScriptBlock {
