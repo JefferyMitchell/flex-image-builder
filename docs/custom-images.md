@@ -156,7 +156,7 @@ The `catalog-multisession` module must be used for Server OS images. The `catalo
 
 ## Trusted Launch (Secure Boot + vTPM)
 
-**Trusted Launch is the default for all production catalogs.** The Packer template, export script, and Terraform variables are all implemented. The next Packer rebuild will be the first end-to-end Trusted Launch validation run — until then, Gen2 without Trusted Launch (`JMFlexCustomImageTest2`) is the validated baseline.
+**Trusted Launch is the default for all production catalogs.** The Packer template, export script, and Terraform variables are all implemented. The next Packer rebuild will be the first end-to-end Trusted Launch validation run — until then, Gen2 without Trusted Launch is the validated baseline.
 
 ### What Trusted Launch requires
 
@@ -208,7 +208,7 @@ Confirm-SecureBootUEFI   # returns True when Secure Boot is active
 
 ### Current validation state
 
-The export script and Terraform variables are implemented. The next Packer rebuild (with `security_type = "TrustedLaunch"` now in the template) will be the first end-to-end Trusted Launch validation run. The Gen2-without-Trusted-Launch pipeline has been validated (`JMFlexCustomImageTest2` catalog, ID `30641284-ee7c-4fd5-87b8-53a35978fdbc`).
+The export script and Terraform variables are implemented. The next Packer rebuild (with `security_type = "TrustedLaunch"` now in the template) will be the first end-to-end Trusted Launch validation run. The Gen2-without-Trusted-Launch pipeline has been validated on a test catalog.
 
 > **If `03-export-image.ps1` outputs "VMGS SAS not returned"**: the snapshot was built without `security_type = "TrustedLaunch"`. Rebuild with the updated Packer template — it is now the default for `win_server_2025_dc`.
 
