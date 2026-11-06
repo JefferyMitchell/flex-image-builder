@@ -47,7 +47,7 @@ A gallery version can't be overwritten, so every build is a new version, and the
 4. **Export, import and update the catalog:**
    - export with `04-export-from-gallery.ps1`;
    - import with `06-import-to-citrix.ps1`, which reads the flags back;
-   - update the catalog with `07-update-catalog-image.ps1`. Run it with `-CheckOnly` first, then choose when machines restart with `-VdaUpdateDelay`.
+   - update the catalog with `07-update-catalog-image.ps1`, a test script that isn't yet validated for production. Run it with `-CheckOnly` first, then choose when machines restart with `-VdaUpdateDelay`.
 
    See [Lifecycle with the API](custom-images.md#lifecycle-with-the-api). The update script refuses an image whose generation, Secure Boot or vTPM settings differ from the catalog's, because the service would accept it and then silently revert. It also refuses static catalogs unless you pass `-Force`, because their machines are re-provisioned.
 5. **Keep the previous version** until the catalog has run on the new one for a while. Then delete old versions from the gallery to stop paying for them.
@@ -186,7 +186,7 @@ Set these up **before** you open the port. Together they provide the limits the 
 Open the port only for the task. Use either of these:
 
 - **The console:** Quick Deploy → Microsoft Azure → Network connections → your connection → Security rules, in Web Studio.
-- **`09-network-rule.ps1`:**
+- **`09-network-rule.ps1` (test script, not yet validated for production):**
 
 ```powershell
 .\packer\scripts\powershell\09-network-rule.ps1 -Connection <connection name>                     # list rules

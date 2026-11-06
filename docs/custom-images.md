@@ -656,7 +656,7 @@ Three scripts take an image through Citrix with the Quick Deploy API instead of 
 | Script | What it does | What it changes |
 |---|---|---|
 | `06-import-to-citrix.ps1` | Imports the exported OS VHD and VMGS, waits for `Ready`, reads back the generation and Trusted Launch flags | Adds an image to the library |
-| `07-update-catalog-image.ps1` | Pre-checks, the image update, then a read-back that catches a silent revert | The catalog's image; machines restart onto it |
+| `07-update-catalog-image.ps1` (test script) | Pre-checks, the image update, then a read-back that catches a silent revert | The catalog's image; machines restart onto it |
 | `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
 
 `07` and `08` take `-CatalogName` or `-CatalogId`. All three are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
@@ -720,6 +720,8 @@ To check an image that's already imported, or to keep waiting after a timeout, r
 > **Use the site-scoped route.** `POST /catalogservice/{customerId}/images`, without the site ID, looks right but is the bring-your-own-subscription route. Its images stay `Pending` forever. See [Troubleshooting](troubleshooting.md#an-imported-image-stays-pending-forever).
 
 ### Update a catalog's image
+
+> **Test script.** `07-update-catalog-image.ps1` isn't yet validated for production. Use it on a test catalog.
 
 Run the checks first. `-CheckOnly` makes no changes:
 

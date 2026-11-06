@@ -1,4 +1,5 @@
 # 09-network-rule.ps1
+# TEST SCRIPT: not yet validated for production. Use it on a test network connection.
 # Lists, opens or closes an inbound port on a Citrix DaaS (Quick Deploy) network connection: the
 # "Security rules" of a VNet peering or Virtual WAN connection to Citrix-managed capacity. Catalog
 # machines there accept nothing from your network by default; open a port to reach them, for example
@@ -52,6 +53,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Write-Warning "Test script: not yet validated for production. Use it on a test network connection."
 . (Join-Path $PSScriptRoot "citrix-api.ps1")
 
 Write-Host "Connecting to Citrix Cloud..."
