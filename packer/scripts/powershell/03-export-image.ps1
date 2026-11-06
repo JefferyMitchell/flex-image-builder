@@ -15,7 +15,7 @@
 #     -ResourceGroup rg-flex-packer-build `
 #     -SnapshotName win_server_2025_dc_202507141200 `
 #     -StorageAccount flexpackerbuild `
-#     -SubscriptionId bf8e9af8-7c74-405f-a685-c15b15cb128f
+#     -SubscriptionId <subscription-id>
 #
 # SnapshotName is the ManagedImageOSDiskSnapshotName from the packer build output
 # (same as ManagedImageName — Packer uses the same timestamp for both).

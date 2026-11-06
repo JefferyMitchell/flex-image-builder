@@ -24,14 +24,14 @@
 #
 # Usage:
 #   .\04-export-from-gallery.ps1 `
-#     -GallerySubscriptionId bf8e9af8-7c74-405f-a685-c15b15cb128f `
+#     -GallerySubscriptionId <gallery-subscription-id> `
 #     -GalleryResourceGroup  rg-images `
 #     -GalleryName           MyImageGallery `
 #     -ImageDefinition       WinServer2025DC `
 #     -ImageVersion          1.0.0 `
 #     -DestStorageAccount    mystorageaccount `
 #     -DestResourceGroup     rg-dest `
-#     -DestSubscriptionId    bf8e9af8-7c74-405f-a685-c15b15cb128f
+#     -DestSubscriptionId    <destination-subscription-id>
 #
 # Notes:
 # - GallerySubscriptionId and DestSubscriptionId can be the same or different.

@@ -18,7 +18,7 @@
 #     -GalleryName           FlexPackerGallery `
 #     -ImageDefinition       WinDesktop11Enterprise23H2 `
 #     -ImageVersion          1.0.0 `
-#     -SubscriptionId        bf8e9af8-7c74-405f-a685-c15b15cb128f
+#     -SubscriptionId        <subscription-id>
 #
 # After this completes, run 04-export-from-gallery.ps1 to export the SAS URIs.
 
