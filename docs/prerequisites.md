@@ -94,7 +94,7 @@ Follow Microsoft's guidance on [high availability](https://learn.microsoft.com/e
 - **Providers and sites:** consider a different service provider for each circuit, and terminate the circuits at different locations on your network.
 - **Inside each circuit:** run both links active-active, and don't terminate them on the same customer device. Microsoft recommends [high resiliency](https://learn.microsoft.com/en-us/azure/expressroute/expressroute-locations-providers) as a minimum where it's available, at the same cost as standard.
 - **Failure detection:** turn on BFD. Failover to the other site can still take up to 180 seconds.
-- **Failover capacity:** if the primary fails, the secondary carries only 5 Gbps. Microsoft doesn't require matching circuits, so check that 5 Gbps covers your traffic, or size it up. You can raise a circuit's bandwidth later, but you can't reduce it.
+- **Failover capacity:** if the primary fails, the secondary carries only 5 Gbps. Check that 5 Gbps covers your traffic, or size it up. You can raise a circuit's bandwidth later, but you can't reduce it.
 - **Gateway capacity:** the gateway's 10 Gbps is a fixed limit, so traffic through it can't reach the circuits' combined 15 Gbps. It's also shared by both circuits, so it's worth planning for separately.
 - **Testing:** if a circuit is on standby, test failover regularly.
 
