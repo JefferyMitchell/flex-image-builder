@@ -39,7 +39,7 @@ Install these on the machine that runs the scripts. For a private-network build,
 | **Azure CLI** | Sign-in, setup, uploads and exports | `winget install Microsoft.AzureCLI` | `brew install azure-cli` |
 | **Packer** | Builds | `winget install Hashicorp.Packer` | `brew install hashicorp/tap/packer` |
 | **Git** | `02-build.ps1` clones `citrix-packer-tools` | `winget install Git.Git` | `brew install git` |
-| **AzCopy v10** | Exports | `winget install Microsoft.Azure.AzCopy.10` | `brew install azcopy` |
+| **AzCopy v10** | Exports | `winget install Microsoft.Azure.AZCopy.10` | `brew install azcopy` |
 | **Terraform 1.5 or later** | Creating the test catalog | `winget install HashiCorp.Terraform` | `brew install terraform` |
 
 `02-build.ps1` installs the Packer plugins it needs: `hashicorp/azure` v2.6.5, and `rgl/windows-update` v0.18.5 unless you pass `-SkipWindowsUpdate`. `terraform init` installs the Citrix provider.
@@ -59,22 +59,33 @@ To install them all, and skip any you already have, run `lab-00-install-tools.ps
 - [ ] **Owner, or Contributor and User Access Administrator**, on that subscription to run setup, because it creates role assignments.
 - [ ] A region that matches the one your catalogs will deploy to.
 - [ ] Quota in that region for the build VM size.
+- [ ] An **Entra member account** that owns the subscription, if you need to create the VNet peering. [Citrix doesn't accept guest or Microsoft accounts](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html) for this.
 - [ ] To find out whether policy blocks public IP addresses. If it does, you need a [private-network build](custom-images.md#private-network-builds-no-public-ip): a build subnet, a machine that can reach it on TCP 5986, and permission to join the subnet.
 
 ### Citrix Cloud
 
 - [ ] A tenant with **Platform Flex entitlement**.
 - [ ] An **API client** from Identity and Access Management → API Access, allowed to manage images and catalogs.
-- [ ] A **network connection** that no production catalog uses.
-- [ ] A **test catalog** you can restart and delete, or permission to create one.
+- [ ] A **network connection** that no production catalog uses. A lab can use plain VNet peering, without [ExpressRoute](prerequisites.md#recommended-connectivity-dual-expressroute).
+- [ ] Permission to **create and delete a test catalog**.
 - [ ] Your **customer ID**, plus the **API host** if you're outside the US.
 
 ### Installers
 
-Download these from [Citrix Downloads](https://www.citrix.com/downloads/):
+Download the latest versions from [Citrix Downloads](https://www.citrix.com/downloads/), which needs a Citrix account with download rights:
 
-- [ ] The **VDA installer** for your OS. `02-build.ps1` accepts versions 2407, 2411, 2503 and 2507.
+- [ ] The **VDA installer** for your OS: `VDAServerSetup` for Windows Server, or `VDAWorkstationSetup` for Windows 11.
 - [ ] **Citrix Optimizer**, as a zip.
+
+**Using a VDA newer than the tooling supports:**
+
+| Requirement | Why |
+|---|---|
+| Pass `-VdaVersion v2507` to `02-build.ps1` | It selects a folder of scripts in `citrix-packer-tools`, not your installer, and that repo currently stops at v2507. Your installer comes from `vda_blob_url` |
+| Keep the version in the file name, such as `VDAServerSetup_<version>.exe` | It's how you can tell which VDA a build used |
+| Record the VDA version in your test results | This combination isn't validated until a build proves it |
+| Check `vda_signer` if the signature check fails | The build stops unless the installer's signer matches. The default is `Citrix Systems, Inc.` |
+| Use the Optimizer template names that `01-upload-installers.ps1` prints | The names can change between Optimizer releases, and the build stops on a name that isn't in the zip |
 
 ### Network access
 
@@ -121,7 +132,15 @@ Build logs are saved in `build-records/`, which is git-ignored. To share results
 | 7 | `09-network-rule.ps1` | Lists, opens and closes a port on a connection | **Opens a port for every machine on the connection** |
 | 8 | `08-delete-catalog.ps1` | Deletes a catalog and its machines. Use `-WhatIf` first | **Deletes the catalog** |
 
-To create the test catalog, use an example in [`infra/examples/`](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples): `multisession-no-domain-join` for the Basic profile.
+### Create the test catalog
+
+Use [`infra/examples/multisession-no-domain-join`](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples/multisession-no-domain-join) for the Basic profile. It needs a multi-session image, which a Windows Server build provides.
+
+1. Build, export and import your image with `02`, `04` and `06`, and note its image ID.
+2. Copy `terraform.tfvars.example` to `terraform.tfvars`. Set `template_image_id` to that ID, set `onprem_network_connection_id`, and keep `number_of_users` low to limit cost.
+3. Set `$env:TF_VAR_citrix_client_secret`, then run `terraform init` and `terraform apply`.
+
+Updating the catalog needs a second image with the same generation and Trusted Launch flags, because `07-update-catalog-image.ps1` refuses a catalog's current image. To avoid a second build, run `06-import-to-citrix.ps1` again with a new `-Name`, using the same SAS URIs before they expire.
 
 To test the portal-based export, use [citrix-flex-image-export](https://github.com/JefferyMitchell/citrix-flex-image-export). It needs a gallery image version, a destination storage account and a new resource group to deploy into.
 
