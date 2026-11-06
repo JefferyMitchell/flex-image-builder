@@ -20,14 +20,14 @@ Set up a disposable environment to test the full image pipeline: build, export, 
 
 ---
 
-## Choose a lab profile
+## Domain join is required
 
-| Profile | Tests | Also needs |
-|---|---|---|
-| **Basic** | Setup, build, export, import, catalog update and the network rule script | Nothing beyond this page's requirements |
-| **Domain-joined** | Everything above, plus Group Policy by OU and domain-joined catalog deletes | Active Directory and a Citrix Cloud Connector (see [Prerequisites](prerequisites.md#active-directory-domain-joined-catalogs-only)) |
+Catalogs must be domain-joined, so a complete lab needs Active Directory, a Citrix Cloud Connector and a network connection. How far you can test depends on what you have:
 
-Start with Basic unless you need to test Group Policy or domain join.
+| You have | You can test |
+|---|---|
+| Azure and Citrix Cloud access | Setup, build and export. The Citrix import may also work, but this hasn't been confirmed without a connection |
+| A network connection and Active Directory too | The test catalog, catalog updates, network rules, access controls and catalog deletes |
 
 ## Install the tools
 
@@ -87,6 +87,15 @@ Download the latest versions from [Citrix Downloads](https://www.citrix.com/down
 | Check `vda_signer` if the signature check fails | The build stops unless the installer's signer matches. The default is `Citrix Systems, Inc.` |
 | Use the Optimizer template names that `01-upload-installers.ps1` prints | The names can change between Optimizer releases, and the build stops on a name that isn't in the zip |
 
+### Active Directory
+
+See [Prerequisites](prerequisites.md#active-directory-domain-joined-catalogs-only) and [Domain Join](domain-join.md) for details.
+
+- [ ] A **domain** that catalog machines can reach through the network connection.
+- [ ] A **Citrix Cloud Connector** registered on that domain.
+- [ ] A **target OU** for the catalog's machines.
+- [ ] A **dedicated service account** that can create and delete computer objects in that OU.
+
 ### Network access
 
 | From | To | Why |
@@ -110,7 +119,7 @@ Never commit these or paste them into tickets or chat.
 | Secret | Where it goes |
 |---|---|
 | Citrix API client secret | `$env:CITRIX_CLIENT_SECRET`, and `$env:TF_VAR_citrix_client_secret` for Terraform |
-| Domain join password (domain-joined profile) | `$env:TF_VAR_domain_service_account_password` |
+| Domain join password | `$env:TF_VAR_domain_service_account_password` |
 | Export SAS URIs | Treat them as secrets. They grant read access for up to 7 days, so revoke them when testing ends |
 
 Also keep your subscription IDs, tenant ID and customer ID out of anything you publish, including test results.
@@ -128,17 +137,19 @@ Build logs are saved in `build-records/`, which is git-ignored. To share results
 | 3 | `02-build.ps1` | Builds an image and publishes a gallery version. Use `-AppsFile` to test the app stage | A temporary build VM and a gallery version |
 | 4 | `04-export-from-gallery.ps1` | Exports the OS disk and guest state, then prints the SAS URIs | A temporary disk and blobs |
 | 5 | `06-import-to-citrix.ps1` | Imports the image and checks its flags | A Citrix image |
-| 6 | `07-update-catalog-image.ps1` | Moves a catalog to the new image. Run it with `-CheckOnly` first | **Restarts catalog machines**, according to `-VdaUpdateDelay` |
-| 7 | `09-network-rule.ps1` | Lists, opens and closes a port on a connection | **Opens a port for every machine on the connection** |
+| 6 | `07-update-catalog-image.ps1` | **Test script.** Moves a catalog to the new image. Run it with `-CheckOnly` first | **Restarts catalog machines**, according to `-VdaUpdateDelay` |
+| 7 | `09-network-rule.ps1` | **Test script.** Lists, opens and closes a port on a connection | **Opens a port for every machine on the connection** |
 | 8 | `08-delete-catalog.ps1` | Deletes a catalog and its machines. Use `-WhatIf` first | **Deletes the catalog** |
+
+Scripts labelled **test script** aren't yet validated for production. Use them only on test catalogs and connections.
 
 ### Create the test catalog
 
-Use [`infra/examples/multisession-no-domain-join`](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples/multisession-no-domain-join) for the Basic profile. It needs a multi-session image, which a Windows Server build provides.
+This needs a network connection and Active Directory. Use [`infra/examples/multisession-domain-joined`](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples/multisession-domain-joined) for a Windows Server image, which [only works in multi-session catalogs](custom-images.md#os-requirements-per-catalog-type). For Windows 11, use `singlesession-domain-joined`.
 
 1. Build, export and import your image with `02`, `04` and `06`, and note its image ID.
-2. Copy `terraform.tfvars.example` to `terraform.tfvars`. Set `template_image_id` to that ID, set `onprem_network_connection_id`, and keep `number_of_users` low to limit cost.
-3. Set `$env:TF_VAR_citrix_client_secret`, then run `terraform init` and `terraform apply`.
+2. Copy `terraform.tfvars.example` to `terraform.tfvars`. Set `template_image_id`, `onprem_network_connection_id` and the `domain_*` values, and keep `number_of_users` low to limit cost.
+3. Set `$env:TF_VAR_citrix_client_secret` and `$env:TF_VAR_domain_service_account_password`, then run `terraform init` and `terraform apply`.
 
 Updating the catalog needs a second image with the same generation and Trusted Launch flags, because `07-update-catalog-image.ps1` refuses a catalog's current image. To avoid a second build, run `06-import-to-citrix.ps1` again with a new `-Name`, using the same SAS URIs before they expire.
 
@@ -155,18 +166,6 @@ These are in `packer/scripts/lab/`.
 | `lab-05-collect-results.ps1` | Copies build records and logs to `lab-results/`, with secrets and identifiers removed | A local results folder |
 | `lab-99-teardown.ps1` | Closes the ports you name, then deletes resource groups marked as part of the lab | **Deletes lab resources** |
 
-### Still to be written
-
-These don't exist yet.
-
-| Script | What it should do | What it would change | Profile |
-|---|---|---|---|
-| `lab-02-network.ps1` | Create the lab network, an NSG and a jump host, with inbound access limited to one address | Azure resources | Both |
-| `lab-03-access-controls.ps1` | Apply the [network access controls](managing-images.md#put-these-controls-around-an-open-port) to test machines: the Windows Firewall rule, an admin group, JEA and logging | Test catalog machines | Both |
-| `lab-04-domain.ps1` | Create a domain controller, OU, join account, Group Policy and Cloud Connector host | Azure and Active Directory | Domain-joined |
-
-Each should follow the same rules as the other scripts: read secrets only from environment variables, never print them, and support `-WhatIf` wherever they change something.
-
 ## Using a shared subscription
 
 If the subscription holds anything else, keep the lab in its own resource groups. `lab-99-teardown.ps1` deletes only groups tagged as part of the lab, so mark each one after you create it:
@@ -178,6 +177,31 @@ If the subscription holds anything else, keep the lab in its own resource groups
 Mark only groups that belong entirely to the lab, because teardown deletes everything in them.
 
 A vCPU quota covers everything in the region. The default build VM needs 2 vCPUs, and `lab-01-check-prereqs.ps1` shows what's free. If it's short, deallocate a VM that isn't in use, and start it again when the build finishes. Catalog machines on Citrix-managed capacity don't use your quota.
+
+## Best practices for production
+
+These come from this repo's design and from Citrix and Microsoft guidance. They haven't all been run in a lab, so test them before you rely on them.
+
+### Network
+
+- Start with [dual ExpressRoute](prerequisites.md#recommended-connectivity-dual-expressroute), and [create the network connection](prerequisites.md#create-the-network-connection) before any catalog that uses it.
+- Keep management access on a jump host in its own subnet, with an NSG that limits inbound access to known addresses.
+- Use an address range that doesn't overlap anything in Azure or on-premises.
+- Keep production catalogs on their own connection, because a Security rule reaches every machine on it.
+
+### Access to machines
+
+- Avoid inbound access where you can, using build-time checks and named admin sessions.
+- If you need a port, [put the access controls around it first](managing-images.md#put-these-controls-around-an-open-port): Windows Firewall, your own NSG, a dedicated admin group with time-limited membership, JEA, and audit logs.
+- Open the port only for the task, and confirm afterwards that it's closed.
+
+### Active Directory
+
+- [Citrix recommends](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html) running directory services in the peered VNet.
+- Give each catalog type its own OU, so Group Policy can target it.
+- Use a [dedicated join account](domain-join.md#service-account-requirements), limited to the target OU.
+- Register a Citrix Cloud Connector on the domain.
+- Make sure catalog machines can reach your DNS and NTP servers.
 
 ## Clean up
 

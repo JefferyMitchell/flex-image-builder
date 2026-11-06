@@ -33,6 +33,7 @@ A reference implementation for deploying Citrix Platform Flex catalogs via Terra
 |---|---|
 | SingleSession, Citrix image, domain-joined | [singlesession-domain-joined](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples/singlesession-domain-joined) |
 | MultiSession, Citrix image, VNet peering only | [multisession-no-domain-join](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples/multisession-no-domain-join) |
+| MultiSession, Citrix image, domain-joined | [multisession-domain-joined](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples/multisession-domain-joined) |
 | SingleSession, custom Packer image | Coming soon |
 
 ## Quick Start

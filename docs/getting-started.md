@@ -38,6 +38,7 @@ Pick the example that matches your scenario from `infra/examples/`:
 |---|---|---|
 | `singlesession-domain-joined` | Knowledge Worker | Yes |
 | `multisession-no-domain-join` | Task Worker (medium) | No (VNet peering only) |
+| `multisession-domain-joined` | Task Worker (medium) | Yes |
 
 ```powershell
 cd infra\examples\singlesession-domain-joined
