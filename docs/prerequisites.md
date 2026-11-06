@@ -58,6 +58,8 @@ brew install terraform
 
 Platform Flex provisions VMs in a **Citrix-managed Azure subscription**, so standard customer quota limits do not apply. However, for `SingleSessionStatic` catalogs, one VM is provisioned per user — verify your `number_of_users` setting is appropriate before applying.
 
+Setting up a place to test? See [Lab Environment](lab-environment.md).
+
 ---
 
 Next: [Getting Started](getting-started.md)
