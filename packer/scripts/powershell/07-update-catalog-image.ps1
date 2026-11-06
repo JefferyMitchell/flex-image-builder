@@ -1,4 +1,5 @@
 # 07-update-catalog-image.ps1
+# TEST SCRIPT: not yet validated for production. Use it on a test catalog.
 # Moves a Citrix DaaS (Quick Deploy) catalog to a new image, with the checks the API doesn't do:
 #
 # Before the update (all read-only; -CheckOnly stops here):
@@ -50,6 +51,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Write-Warning "Test script: not yet validated for production. Use it on a test catalog."
 if (-not $CheckOnly -and -not $PSBoundParameters.ContainsKey("VdaUpdateDelay")) {
     throw "Choose when machines restart: -VdaUpdateDelay 0 (all now; sessions end), -1 (each machine's next shutdown) or N (spread over N minutes, warning users first). Nothing was changed."
 }
