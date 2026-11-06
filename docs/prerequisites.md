@@ -64,19 +64,50 @@ Citrix's guide doesn't say how long this takes, or whether the address range can
 
 ### Recommended connectivity: dual ExpressRoute
 
-Citrix-managed capacity peers with a VNet you manage, and that VNet connects to your locations. [Citrix leaves that connection up to you](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html). For production, start with two metered ExpressRoute circuits at different peering locations:
+Citrix-managed capacity peers with a VNet you manage, and that VNet connects to your locations. [Citrix leaves that connection up to you](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html). For production, start with two metered ExpressRoute circuits at different peering locations, sharing one zone-redundant gateway:
 
-| Component | Recommendation |
+| Component | Recommendation | Price (Zone 1, US dollars) |
+|---|---|---|
+| **Primary circuit** | 10 Gbps, Standard, metered data, at peering location A | $3,400 a month |
+| **Secondary circuit** | 5 Gbps, Standard, metered data, at peering location B | $2,180 a month |
+| **ExpressRoute gateway** | ErGw3AZ, [rated for 10 Gbps](https://learn.microsoft.com/en-us/azure/expressroute/expressroute-about-virtual-network-gateways) | $2.151 an hour, about $1,570 a month in East US 2 |
+| **Fixed total** | | **About $7,150 a month** |
+| **Outbound data** | On whichever circuit carries it | $0.025 per GB |
+| **Inbound data** | | Free |
+
+These are list prices from the [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices) on November 5, 2026. Your agreement may differ, gateway prices vary by region, and carrier and cross-connect fees are extra. Confirm them in the [Azure pricing calculator](https://azure.microsoft.com/en-us/pricing/calculator/) before you quote them.
+
+| Monthly outbound data | Outbound cost | Total a month |
+|---|---|---|
+| 50 TB | $1,250 | About $8,400 |
+| 200 TB | $5,000 | About $12,150 |
+| 500 TB | $12,500 | About $19,650 |
+| 1 PB | $25,000 | About $32,150 |
+
+**Metered or unlimited:** a Standard unlimited plan costs $51,300 a month at 10 Gbps and $25,650 at 5 Gbps. Metered stays cheaper until a circuit sends about 1.9 PB a month at 10 Gbps, or about 940 TB at 5 Gbps.
+
+#### Design for failure
+
+Follow Microsoft's guidance on [high availability](https://learn.microsoft.com/en-us/azure/expressroute/designing-for-high-availability-with-expressroute) and [disaster recovery](https://learn.microsoft.com/en-us/azure/expressroute/designing-for-disaster-recovery-with-expressroute-privatepeering):
+
+- **Peering locations:** two locations in one metro can fail together in a natural disaster, so prefer different metros. Keep them in the same geopolitical region, or both circuits need the Premium SKU, which costs more.
+- **Providers and sites:** consider a different service provider for each circuit, and terminate the circuits at different locations on your network.
+- **Inside each circuit:** run both links active-active, and don't terminate them on the same customer device. Microsoft recommends [high resiliency](https://learn.microsoft.com/en-us/azure/expressroute/expressroute-locations-providers) as a minimum where it's available, at the same cost as standard.
+- **Failure detection:** turn on BFD. Failover to the other site can still take up to 180 seconds.
+- **Failover capacity:** if the primary fails, the secondary carries only 5 Gbps. Microsoft doesn't require matching circuits, so check that 5 Gbps covers your traffic, or size it up. You can raise a circuit's bandwidth later, but you can't reduce it.
+- **Gateway capacity:** the gateway's 10 Gbps is a fixed limit, so traffic through it can't reach the circuits' combined 15 Gbps. It's also shared by both circuits, so it's worth planning for separately.
+- **Testing:** if a circuit is on standby, test failover regularly.
+
+#### Keep traffic on the primary
+
+Set your preference in both directions, because traffic that goes out on one circuit and returns on the other can be blocked by a firewall or NAT in the path.
+
+| Direction | How to prefer the primary |
 |---|---|
-| **Primary circuit** | 10 Gbps, Standard, metered data, at peering location A |
-| **Secondary circuit** | 5 Gbps, Standard, metered data, at peering location B |
-| **ExpressRoute gateway** | Ultra Performance or ErGw3AZ, shared by both circuits. [Rated for 10 Gbps](https://learn.microsoft.com/en-us/azure/expressroute/expressroute-faqs) |
+| **Azure to your network** | In order of effectiveness: advertise more specific routes over the primary, set a higher connection weight on it, or prepend your AS number on routes over the secondary |
+| **Your network to Azure** | Set a higher BGP local preference on routes learned from the primary |
 
-**Plan for these:**
-
-- **Failover capacity:** if the primary fails, the secondary carries only 5 Gbps. Check that this covers your traffic, or size the secondary to match.
-- **Costs:** a monthly fee for each circuit, an hourly fee for the gateway, and outbound data on whichever circuit carries it. Inbound is free. Carrier and cross-connect fees are extra. Metered plans suit most environments, but compare them with unlimited plans if you send a lot of data out. Get current rates from the [Azure pricing calculator](https://azure.microsoft.com/en-us/pricing/calculator/), and confirm them before you quote them.
-- **Address space:** the peered range [can't overlap](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html) any address in Azure or on-premises.
+Don't configure your routers to ignore longer AS paths. Microsoft uses AS path prepending to move traffic during maintenance, and [ignoring it can cause an outage](https://learn.microsoft.com/en-us/azure/expressroute/expressroute-faqs). Where you can, terminate BGP on stateless devices, and test failover if you can't.
 
 A [test lab](lab-environment.md) doesn't need ExpressRoute.
 
