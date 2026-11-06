@@ -19,7 +19,7 @@ $tools = @(
     @{ Name = "Azure CLI";    Command = "az";        VersionArgs = @("--version"); Winget = "Microsoft.AzureCLI";         Brew = "brew install azure-cli" }
     @{ Name = "Packer";       Command = "packer";    VersionArgs = @("version");   Winget = "Hashicorp.Packer";           Brew = "brew install hashicorp/tap/packer" }
     @{ Name = "Git";          Command = "git";       VersionArgs = @("--version"); Winget = "Git.Git";                    Brew = "brew install git" }
-    @{ Name = "AzCopy v10";   Command = "azcopy";    VersionArgs = @("--version"); Winget = "Microsoft.Azure.AzCopy.10";  Brew = "brew install azcopy" }
+    @{ Name = "AzCopy v10";   Command = "azcopy";    VersionArgs = @("--version"); Winget = "Microsoft.Azure.AZCopy.10";  Brew = "brew install azcopy" }
     @{ Name = "Terraform";    Command = "terraform"; VersionArgs = @("version");   Winget = "Hashicorp.Terraform";        Brew = "brew install terraform" }
 )
 
@@ -66,3 +66,4 @@ if ($stillMissing -and -not $WhatIfPreference) {
     exit 1
 }
 Write-Host "`nNext: run lab-01-check-prereqs.ps1 under PowerShell 7."
+exit 0
