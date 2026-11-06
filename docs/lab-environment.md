@@ -59,14 +59,14 @@ To install them all, and skip any you already have, run `lab-00-install-tools.ps
 - [ ] **Owner, or Contributor and User Access Administrator**, on that subscription to run setup, because it creates role assignments.
 - [ ] A region that matches the one your catalogs will deploy to.
 - [ ] Quota in that region for the build VM size.
-- [ ] An **Entra member account** that owns the subscription, if you need to create the VNet peering. [Citrix doesn't accept guest or Microsoft accounts](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html) for this.
+- [ ] An **Entra account from the subscription's own tenant** that owns the subscription, to create the VNet peering. [Citrix doesn't support guest or live.com accounts](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html) for this.
 - [ ] To find out whether policy blocks public IP addresses. If it does, you need a [private-network build](custom-images.md#private-network-builds-no-public-ip): a build subnet, a machine that can reach it on TCP 5986, and permission to join the subnet.
 
 ### Citrix Cloud
 
 - [ ] A tenant with **Platform Flex entitlement**.
 - [ ] An **API client** from Identity and Access Management → API Access, allowed to manage images and catalogs.
-- [ ] A **network connection** that no production catalog uses. A lab can use plain VNet peering, without [ExpressRoute](prerequisites.md#recommended-connectivity-dual-expressroute).
+- [ ] A **network connection** that no production catalog uses. If you don't have one, [create one](prerequisites.md#create-the-network-connection). A lab can use plain VNet peering, without [ExpressRoute](prerequisites.md#recommended-connectivity-dual-expressroute).
 - [ ] Permission to **create and delete a test catalog**.
 - [ ] Your **customer ID**, plus the **API host** if you're outside the US.
 
