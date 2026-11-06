@@ -29,6 +29,39 @@ nav_order: 2
 
 The Network Connection ID (a GUID) is found in **Citrix DaaS > Manage > Network Connections**.
 
+### Create the network connection
+
+Create the connection **before** the catalog that uses it, because a catalog's connection type can't be changed afterwards. These steps follow [Citrix's network connections guide](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html), which also covers what the console shows in more detail.
+
+**Have these ready:**
+
+- **An Entra account that owns the Azure subscription.** Citrix doesn't support live.com accounts, or guest accounts from a different tenant.
+- **The subscription, resource group and VNet** to peer with.
+- **An unused address range for the Citrix-managed network.** It must not overlap anything in Azure or on-premises. For example, if your VNet is `10.0.0.0/16`, use a range such as `192.168.0.0/24`, not `10.0.0.0/24`.
+- **DNS servers** that catalog machines can use. If you use Secure DNS or a third-party DNS provider, add the address range to its allow list.
+- **Network security groups** on your VNet that are open to that address range.
+- **Routes** that let catalog machines reach your network locations.
+
+**Create it:**
+
+1. In Citrix DaaS for Azure, go to **Quick Deploy > Microsoft Azure**, and expand **Network Connections**.
+2. Click **Add Connection**, then the **Add Azure VNet Peering** box.
+3. Click **Authenticate Azure Account**, sign in as the subscription owner, and accept the terms.
+4. Enter a name for the peer, then select the subscription, resource group and VNet.
+5. Say whether the VNet uses an Azure Virtual Network Gateway. If it does, choose whether to turn on **route propagation**, which adds routes through the gateway automatically. Changing this later can interrupt VDA traffic.
+6. Enter the IP address and choose the network mask for the address range.
+7. Say whether to add custom routes. For each one, enter a name, a destination with a prefix between 16 and 24, and a next hop type. For **Virtual appliance**, also enter its internal IP address.
+8. Click **Add VNet Peering**.
+
+**Afterwards:**
+
+- Check the connection under **Network Connections > Azure VNet Peers**. Its details show its region, network space, peered VNets, routes, and what's using it.
+- If you added custom routes, update your company's route tables with the Citrix destination VNet information.
+- Changing custom routes later can disrupt user sessions.
+- To delete the connection, remove its catalogs first.
+
+Citrix's guide doesn't say how long this takes, or whether the address range can be changed afterwards, so choose the range carefully.
+
 ### Recommended connectivity: dual ExpressRoute
 
 Citrix-managed capacity peers with a VNet you manage, and that VNet connects to your locations. [Citrix leaves that connection up to you](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html). For production, start with two metered ExpressRoute circuits at different peering locations:
