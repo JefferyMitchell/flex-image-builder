@@ -22,7 +22,7 @@ Set up a disposable environment to test the full image pipeline: build, export, 
 
 ## Domain join is required
 
-Catalogs must be domain-joined, so a complete lab needs Active Directory, a Citrix Cloud Connector and a network connection. How far you can test depends on what you have:
+Lab catalogs must be domain-joined, so a complete lab needs Active Directory, a Citrix Cloud Connector and a network connection. How far you can test depends on what you have:
 
 | You have | You can test |
 |---|---|
