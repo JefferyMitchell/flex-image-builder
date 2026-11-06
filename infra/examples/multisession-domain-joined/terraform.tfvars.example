@@ -1,0 +1,19 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is git-ignored — never commit it.
+# Secrets (citrix_client_secret, domain_service_account_password) must be
+# passed via environment variables, not this file.
+
+citrix_customer_id = "your-customer-id"
+citrix_client_id   = "your-client-id"
+
+catalog_name      = "MyOrg-TaskWorker"
+persona           = "Task worker (medium)"
+region            = "eastus"
+subscription_name = "Citrix Managed"
+template_image_id = "your-multisession-image-guid"
+number_of_users   = 8
+
+onprem_network_connection_id = "your-network-connection-guid"
+domain_name                  = "corp.example.com"
+domain_ou                    = "OU=Citrix-Servers,DC=corp,DC=example,DC=com"
+domain_service_account       = "citrix-svc"
