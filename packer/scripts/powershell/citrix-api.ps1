@@ -1,6 +1,7 @@
 # citrix-api.ps1
 # Shared helpers for the Citrix DaaS Quick Deploy (catalogservice) API. Dot-sourced by
-# 06-import-to-citrix.ps1, 07-update-catalog-image.ps1 and 08-delete-catalog.ps1; not run directly.
+# 06-import-to-citrix.ps1, 07-update-catalog-image.ps1, 08-delete-catalog.ps1 and 09-network-rule.ps1;
+# not run directly.
 #
 # Credentials come from environment variables only, the same ones the Terraform provider reads:
 #   CITRIX_CUSTOMER_ID    Citrix Cloud customer ID (or pass -CustomerId)

@@ -11,10 +11,14 @@
 #     every network peered with it. A rule can't be limited to one address.
 #   - It applies to every machine on the connection, in every catalog that uses it.
 #   - It takes about 3 minutes to reach the machines.
-# So open only what you need, for as long as you need it.
+# So open only what you need, for as long as you need it. Before you do, read "Reaching catalog
+# machines from your network" in docs/managing-images.md: it covers how to avoid an open port, and
+# the controls (host firewall, your own NSG, admin group, JEA) that provide the limits a rule can't.
 #
 # The API is the one the Web Studio console uses (Quick Deploy > Microsoft Azure > Network connections >
-# your connection > Security rules); it isn't in the published API reference:
+# your connection > Security rules); it isn't in the published API reference, so it can change without
+# notice. If this script fails, use the console. If -Close fails, the port stays open until you close
+# it there:
 #   GET    {customerId}/{siteId}/managedCapacity/onPremConnections/{connectionId}/openPorts
 #   POST   .../onPremConnections/{connectionId}/port/{port}/openPort   {"port","name","description","protocol"}
 #   DELETE .../onPremConnections/{connectionId}/port/{port}
@@ -86,7 +90,7 @@ switch ($PSCmdlet.ParameterSetName) {
             Invoke-CitrixApi POST "$base/port/$Open/openPort" @{ port = "$Open"; name = $Name; description = $Description; protocol = $Protocol.ToUpperInvariant() } | Out-Null
             Wait-Rule $Open $true
             Write-Warning ("Port $Open is now open to every machine on '$($conn.name)', from that VNet and every network peered with it. " +
-                           "It reaches the machines in about 3 minutes. Close it when you're done: .\09-network-rule.ps1 -Connection '$($conn.name)' -Close $Open")
+                           "It reaches the machines in about 3 minutes. To limit who can use it, see docs/managing-images.md. Close it when you're done: .\09-network-rule.ps1 -Connection '$($conn.name)' -Close $Open")
         }
     }
     "Close" {
