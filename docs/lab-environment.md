@@ -44,10 +44,11 @@ Install these on the machine that runs the scripts. For a private-network build,
 
 `02-build.ps1` installs the Packer plugins it needs: `hashicorp/azure` v2.6.5, and `rgl/windows-update` v0.18.5 unless you pass `-SkipWindowsUpdate`. `terraform init` installs the Citrix provider.
 
-Open a new terminal after installing, then check that each tool is found:
+To install them all, and skip any you already have, run `lab-00-install-tools.ps1`. It works in Windows PowerShell 5.1 too. Add `-WhatIf` to see what it would install:
 
 ```powershell
-pwsh --version; az version; packer version; git --version; azcopy --version; terraform version
+.\packer\scripts\lab\lab-00-install-tools.ps1 -WhatIf
+.\packer\scripts\lab\lab-00-install-tools.ps1
 ```
 
 ## Have these ready
@@ -85,6 +86,12 @@ Download these from [Citrix Downloads](https://www.citrix.com/downloads/):
 | The build VM | Your storage account | Installers |
 | The build VM | Windows Update, GitHub and your Chocolatey source | Updates, the pinned Chocolatey MSI and app packages |
 
+When it's ready, check everything with `lab-01-check-prereqs.ps1`. It changes nothing, and its output leaves out IDs and secrets:
+
+```powershell
+.\packer\scripts\lab\lab-01-check-prereqs.ps1 -SubscriptionId <subscription-id> -Location <region> -Connection <connection name>
+```
+
 ## Secrets
 
 Never commit these or paste them into tickets or chat.
@@ -97,7 +104,7 @@ Never commit these or paste them into tickets or chat.
 
 Also keep your subscription IDs, tenant ID and customer ID out of anything you publish, including test results.
 
-Build logs are saved in `build-records/`, which is git-ignored. Check them before you share them.
+Build logs are saved in `build-records/`, which is git-ignored. To share results, run `lab-05-collect-results.ps1`. It removes secrets and identifiers, and flags any secret it finds so you can rotate it. It uses pattern matching and can miss things, so read its output before you share it.
 
 ## Scripts
 
@@ -118,25 +125,51 @@ To create the test catalog, use an example in [`infra/examples/`](https://github
 
 To test the portal-based export, use [citrix-flex-image-export](https://github.com/JefferyMitchell/citrix-flex-image-export). It needs a gallery image version, a destination storage account and a new resource group to deploy into.
 
+### Lab scripts
+
+These are in `packer/scripts/lab/`.
+
+| Script | What it does | What it changes |
+|---|---|---|
+| `lab-00-install-tools.ps1` | Installs the tools above with `winget`, skipping any already present, and reports their versions. On macOS and Linux, it lists what's missing | The local machine |
+| `lab-01-check-prereqs.ps1` | Checks tools, the subscription, your roles, vCPU quota, public IP policy, Citrix variables and API access, and the network connection | Nothing |
+| `lab-05-collect-results.ps1` | Copies build records and logs to `lab-results/`, with secrets and identifiers removed | A local results folder |
+| `lab-99-teardown.ps1` | Closes the ports you name, then deletes resource groups marked as part of the lab | **Deletes lab resources** |
+
 ### Still to be written
 
-These don't exist yet. They'd go in `packer/scripts/lab/`.
+These don't exist yet.
 
 | Script | What it should do | What it would change | Profile |
 |---|---|---|---|
-| `lab-00-install-tools.ps1` | Install the tools above with `winget`, skipping any already present, and report their versions | The local machine | Both |
-| `lab-01-check-prereqs.ps1` | Check tools, Azure sign-in and roles, public IP policy, Citrix environment variables and API access, then list what's missing | Nothing | Both |
 | `lab-02-network.ps1` | Create the lab network, an NSG and a jump host, with inbound access limited to one address | Azure resources | Both |
 | `lab-03-access-controls.ps1` | Apply the [network access controls](managing-images.md#put-these-controls-around-an-open-port) to test machines: the Windows Firewall rule, an admin group, JEA and logging | Test catalog machines | Both |
 | `lab-04-domain.ps1` | Create a domain controller, OU, join account, Group Policy and Cloud Connector host | Azure and Active Directory | Domain-joined |
-| `lab-05-collect-results.ps1` | Gather build records and script results, flag secrets in logs, and remove IDs and SAS tokens from the output | A local results file | Both |
-| `lab-99-teardown.ps1` | List everything the lab created, ask for confirmation, then close ports and delete it. It must refuse anything it did not create | **Deletes lab resources** | Both |
 
-Each should follow the same rules as the other scripts: read secrets only from environment variables, never print them, stop on the first error, and support `-WhatIf` wherever they change something.
+Each should follow the same rules as the other scripts: read secrets only from environment variables, never print them, and support `-WhatIf` wherever they change something.
+
+## Using a shared subscription
+
+If the subscription holds anything else, keep the lab in its own resource groups. `lab-99-teardown.ps1` deletes only groups tagged as part of the lab, so mark each one after you create it:
+
+```powershell
+.\packer\scripts\lab\lab-99-teardown.ps1 -SubscriptionId <subscription-id> -LabName image-lab -MarkResourceGroup rg-flex-packer-build
+```
+
+Mark only groups that belong entirely to the lab, because teardown deletes everything in them.
+
+A vCPU quota covers everything in the region. The default build VM needs 2 vCPUs, and `lab-01-check-prereqs.ps1` shows what's free. If it's short, deallocate a VM that isn't in use, and start it again when the build finishes. Catalog machines on Citrix-managed capacity don't use your quota.
 
 ## Clean up
 
-When you've finished testing, check that these are gone:
+When you've finished testing, list what teardown would remove, then run it. It lists everything, and asks before each delete:
+
+```powershell
+.\packer\scripts\lab\lab-99-teardown.ps1 -SubscriptionId <subscription-id> -LabName image-lab -WhatIf
+.\packer\scripts\lab\lab-99-teardown.ps1 -SubscriptionId <subscription-id> -LabName image-lab -Connection <connection name> -ClosePort 5985
+```
+
+Then check that these are gone. Teardown doesn't remove the Citrix items or role assignments outside the marked groups:
 
 - [ ] Security rules on the network connection, listed with `09-network-rule.ps1 -Connection <name>`
 - [ ] The test catalog and its machines
