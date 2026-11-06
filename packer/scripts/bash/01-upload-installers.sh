@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# DEPRECATED: use the PowerShell scripts in packer/scripts/powershell (run with pwsh 7 on macOS/Linux).
+# These bash scripts predate the Trusted Launch, gallery and managed-identity changes.
 # 01-upload-installers.sh
 # Uploads VDA installer and Citrix Optimizer, prints SAS URLs for pkrvars.
 # Usage: ./01-upload-installers.sh --storage-account <name> --vda-path /path/to/VDASetup.exe --optimizer-path /path/to/CitrixOptimizer.zip

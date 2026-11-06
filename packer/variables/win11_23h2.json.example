@@ -1,0 +1,29 @@
+{
+  "use_azure_cli_auth":     "true",
+  "client_subscription_id": "<subscription that holds the build resource group and gallery>",
+
+  "image_resource_group":   "rg-flex-packer-build",
+  "image_name":             "win_desktop_11_23h2",
+  "gallery_image_version":  "1.0.0",
+  "gallery_name":           "FlexPackerGallery",
+  "gallery_image_name":     "WinDesktop11Enterprise23H2",
+  "location":               "eastus",
+  "image_version":          "latest",
+
+  "managed_identity_id":    "<managed_identity_id, from 00-setup-azure.ps1>",
+  "vda_blob_url":           "https://<storage-account>.blob.core.windows.net/installers/VDAWorkstationSetup_2507.exe",
+  "vda_sha256":             "<SHA-256, from 01-upload-installers.ps1>",
+  "optimizer_blob_url":     "https://<storage-account>.blob.core.windows.net/installers/CitrixOptimizer.zip",
+  "optimizer_sha256":       "<SHA-256, from 01-upload-installers.ps1>",
+  "optimizer_template":     "Citrix_Windows_11_2009.xml",
+
+  "winrm_insecure":         "true",
+  "allowed_inbound_ip":     "<your egress IP>/32",
+
+  "virtual_network_name":                "",
+  "virtual_network_subnet_name":         "",
+  "virtual_network_resource_group_name": "",
+
+  "install_browser_chrome_flag":  "true",
+  "install_browser_firefox_flag": "false"
+}

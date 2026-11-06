@@ -96,20 +96,24 @@ catalog enters an Error state after approximately 30 seconds:
 Error: Catalog deletion is no longer in progress for catalog ID: ..., current state: Error
 ```
 
-The provider does pass the service account credentials in the destroy plan — this is not
-a credentials problem. The Citrix backend fails the unjoin or VM deprovision step
-asynchronously, and the provider surfaces the final Error state as a Terraform error.
+**Correction:** this *is* a credentials problem. The service account credentials are in
+state, but the provider's catalog delete sends only `deleteVm` and
+`deleteResourceLocationIfUnused`, not `serviceAccount` / `serviceAccountPassword`. Without
+them the backend can't remove the machines' computer accounts, and the delete ends in
+`Error` (`ErrorDeletionUnknown`). The same delete sent through the API *with* the
+credentials succeeds, and it also recovers a catalog already in `Error`.
 
-**Workaround:** Delete the catalog via the Citrix Cloud portal (Platform Flex → Catalogs
-→ Delete), which appears to use a more robust deletion path. Then clean Terraform state:
+**Workaround:** a credentialed delete, then `terraform destroy` for the rest:
 
 ```powershell
-terraform state rm module.catalog.citrix_quickdeploy_catalog.this
-terraform state rm citrix_quickdeploy_template_image.this
+.\packer\scripts\powershell\08-delete-catalog.ps1 -CatalogName <name> -TerraformDir <example dir>
+terraform destroy
 ```
 
-Retain the Citrix `TransactionId` from the Terraform error output for support escalation
-if the pattern repeats.
+The script waits for `NotFound` and then runs `terraform state rm` for the catalog. If
+`terraform destroy` runs before the delete finishes, the provider's own delete fails with
+"Deletion of this catalog is already in progress". See
+[Delete a domain-joined catalog](custom-images.md#delete-a-domain-joined-catalog).
 
 ---
 

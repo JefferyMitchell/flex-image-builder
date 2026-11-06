@@ -35,3 +35,9 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Build logs and records written by 02-build.ps1
+build-records/
+
+# Results written by lab-05-collect-results.ps1
+lab-results/

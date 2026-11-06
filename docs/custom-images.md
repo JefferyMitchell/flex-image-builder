@@ -37,16 +37,17 @@ Step 1 — Azure setup          Step 2 — Stage installers     Step 3 — Packe
 ─────────────────────         ──────────────────────────    ──────────────────────
 00-setup-azure         →      01-upload-installers    →     02-build
 Create RG, storage            Upload VDA + Optimizer        Clone citrix-packer-tools
-account, service              Generate SAS URLs             Run packer build
-principal                     (4 hour expiry)               ~45 min
-                                                            Output: OS disk SNAPSHOT
-                                                                    Managed Image
+account, service              Print blob URLs (build VM     Run packer build
+principal, managed identity   reads via managed identity)   ~45 min
+                                                            Output: gallery image
+                                                            version (specialized,
+                                                            Trusted Launch)
 
 Step 4 — Export VHD           Step 5 — Register + deploy
 ────────────────────          ──────────────────────────
-03-export-image        →      terraform apply
-AzCopy snapshot to            citrix_quickdeploy_template_image
-VHD blob (not image)          registers image in Flex library
+04-export-from-gallery →      terraform apply
+Temp disk; AzCopy OS VHD      citrix_quickdeploy_template_image
++ VMGS to a blob              registers image in Flex library
 Generate blob SAS URI         citrix_quickdeploy_catalog
 (required by Citrix)          provisions machines from it
 ```
@@ -74,6 +75,8 @@ In the Packer template, Gen2 is selected by choosing a `-g2` marketplace SKU. Th
 That single SKU choice determines that the entire chain — build VM, OS disk, snapshot, managed image — is all Gen2.
 
 ### Export the snapshot, not the managed image
+
+> **Current templates:** the templates publish straight into a *specialized* gallery image version (`"specialized": true`), so Packer never calls Generalize and no managed image is created. The gallery version holds the same pre-generalization disk the snapshot below describes, and `04-export-from-gallery.ps1` exports it (OS VHD + VMGS). The snapshot path (`03-export-image.ps1`) remains for builds that produce snapshots.
 
 This is the most critical and non-obvious point in the pipeline.
 
@@ -111,7 +114,14 @@ Citrix Platform Flex accesses your blob storage directly from Citrix's backend i
 
 The SAS token must grant read (`sp=r`) over HTTPS (`spr=https`). The `03-export-image.ps1` script generates this automatically and outputs the full SAS URI to paste into Terraform.
 
-SAS tokens have an expiry. The script defaults to 7 days (`-SasDays 7`). If you need to re-apply Terraform after the SAS expires, re-run the export script with `-SasDays` set to however many days you need — it will skip the AzCopy transfer (the VHD blob already exists) and generate a fresh SAS token.
+**How the SAS is made:** the export scripts generate a **user-delegation SAS**. It's signed with your Entra sign-in, not the storage account key, and the scripts never read account keys.
+
+- It lasts at most 7 days (`-SasDays`, default 7).
+- You can revoke it early with `az storage account revoke-delegation-keys`. An account-key SAS can only be revoked by rotating the key.
+- AzCopy writes the blobs using your `az` sign-in (`AZCOPY_AUTO_LOGIN_TYPE=AZCLI`), so no write SAS exists either.
+- You need **Storage Blob Data Contributor** on the storage account. `00-setup-azure.ps1` assigns it.
+
+If the SAS expires before you've imported the image, re-run the export script to get a fresh one.
 
 ### SAS expiry must be calculated in UTC, not local time
 
@@ -146,7 +156,7 @@ The `catalog-multisession` module must be used for Server OS images. The `catalo
 
 ## Trusted Launch (Secure Boot + vTPM)
 
-**Trusted Launch is the default for all production catalogs.** The Packer template, export script, and Terraform variables are all implemented. The next Packer rebuild will be the first end-to-end Trusted Launch validation run — until then, Gen2 without Trusted Launch (`test-catalog`) is the validated baseline.
+**Trusted Launch is the default for all production catalogs.** The Packer template, export script, and Terraform variables are all implemented. The next Packer rebuild will be the first end-to-end Trusted Launch validation run — until then, Gen2 without Trusted Launch is the validated baseline.
 
 ### What Trusted Launch requires
 
@@ -164,7 +174,7 @@ The `guest_disk_uri` field in `citrix_quickdeploy_template_image` is optional in
 
 ### How it works
 
-When `security_type = "TrustedLaunch"` is set in the Packer builder, the build VM is provisioned as a Trusted Launch VM. Azure stores both the OS disk data and the VM Guest State (the Secure Boot key database and vTPM state) linked to the OS disk snapshot.
+When `security_type = "TrustedLaunch"` is set in the Packer builder, the build VM is provisioned as a Trusted Launch VM. The templates also set `secure_boot_enabled` and `vtpm_enabled` to `true`: with `security_type` alone, the plugin creates a Trusted Launch VM with **both turned off**, so the image would be built and captured on a VM that never booted with Secure Boot. Azure stores both the OS disk data and the VM Guest State (the Secure Boot key database and vTPM state) linked to the OS disk snapshot.
 
 The `az snapshot grant-access` command supports a `--security-data-access-level Read` flag. When the snapshot was created from a Trusted Launch VM, this returns both an `accessSAS` (for the OS disk) and a `securityDataAccessSAS` (for the VMGS data) in a single call. The export script uses AzCopy to copy both blobs to storage and generates individual read SAS URIs for each.
 
@@ -198,7 +208,7 @@ Confirm-SecureBootUEFI   # returns True when Secure Boot is active
 
 ### Current validation state
 
-The export script and Terraform variables are implemented. The next Packer rebuild (with `security_type = "TrustedLaunch"` now in the template) will be the first end-to-end Trusted Launch validation run. The Gen2-without-Trusted-Launch pipeline has been validated (`test-catalog` catalog, ID `<catalog-id>`).
+The export script and Terraform variables are implemented. The next Packer rebuild (with `security_type = "TrustedLaunch"` now in the template) will be the first end-to-end Trusted Launch validation run. The Gen2-without-Trusted-Launch pipeline has been validated on a test catalog.
 
 > **If `03-export-image.ps1` outputs "VMGS SAS not returned"**: the snapshot was built without `security_type = "TrustedLaunch"`. Rebuild with the updated Packer template — it is now the default for `win_server_2025_dc`.
 
@@ -288,7 +298,28 @@ The error without this is: *"Could not retrieve the list of available versions f
 
 ### Step 1 — Azure Setup
 
-Run once per environment. Creates the resource group, storage account, and service principal.
+Run once per environment. Creates:
+
+- the resource group, storage account and containers;
+- **Storage Blob Data Contributor for you** on that storage account, because uploads and exports use your sign-in, not account keys;
+- the build VM's managed identity;
+- the Azure Compute Gallery, with one Trusted Launch image definition per template (Gen2, `SecurityType=TrustedLaunch`, Specialized). Packer publishes into these but doesn't create them.
+
+**How Packer signs in (`-AuthMode`):**
+
+| Mode | Packer runs as | Secret | Use for |
+|---|---|---|---|
+| `Cli` (default) | your `az login` session | none | interactive builds |
+| `ServicePrincipal` | a service principal with Contributor on the build resource group | a client secret, shown once | unattended builds where federation isn't available |
+
+For CI, prefer workload identity federation (OIDC), which needs no stored secret. `ServicePrincipal` needs rights to register applications in Entra ID.
+
+In both modes, Packer builds **inside** the build resource group (`build_resource_group_name`). It never creates a temporary resource group, so resource-group-scoped rights are enough.
+
+**Roles:**
+
+- **To run setup:** Owner, or Contributor + User Access Administrator, on the subscription. Setup creates role assignments.
+- **For builds:** Contributor on the build resource group, plus Storage Blob Data Contributor on its storage account.
 
 ```powershell
 .\packer\scripts\powershell\00-setup-azure.ps1 `
@@ -297,7 +328,7 @@ Run once per environment. Creates the resource group, storage account, and servi
     -Prefix flex-packer
 ```
 
-The script outputs SP credentials and resource names to paste into your Packer variables file. Keep the output — the client secret is shown once.
+The script prints the values to paste into your Packer variables file. In `ServicePrincipal` mode that includes the client secret. It's shown once, so put it in a secret manager, not in a file you might commit.
 
 ---
 
@@ -308,25 +339,42 @@ Download the VDA installer and Citrix Optimizer from [Citrix Downloads](https://
 ```powershell
 .\packer\scripts\powershell\01-upload-installers.ps1 `
     -StorageAccount flexpackerbuild `
-    -VdaPath C:\Downloads\VDASetup.exe `
+    -VdaPath C:\Downloads\VDAServerSetup_2507.exe `
     -OptimizerPath C:\Downloads\CitrixOptimizer.zip
 ```
 
-The script generates SAS URLs and writes them into your Packer variables file automatically.
+The installers keep their file names in storage (`VDAServerSetup_2507.exe`), so each version stays side by side and you can always tell which VDA a build used. The script prints four values to paste into your Packer variables file:
 
-> **Gotcha — SAS expiry on installer blobs:** The SAS URLs generated for the VDA installer and Optimizer default to a short expiry. If you don't start the Packer build within that window, Packer will fail when trying to download the VDA installer — it will appear as a generic download error. Re-run `01-upload-installers.ps1` to get fresh SAS URLs before retrying the build.
+- `vda_blob_url` and `optimizer_blob_url`: plain blob URLs. There is no SAS and no expiry: the build VM downloads the installers with its user-assigned managed identity (`managed_identity_id`, from Step 1).
+- `vda_sha256` and `optimizer_sha256`: each file's SHA-256, also stored as blob metadata. The build VM checks both downloads against them before installing anything (see [What the build verifies and records](#what-the-build-verifies-and-records)).
+
+It also lists the Optimizer templates in your zip, for `optimizer_template`.
+
+> **Note:** `--auth-mode login` uploads need a data-plane role on the storage account for the signed-in user (Storage Blob Data Contributor). Owner or Contributor alone is not enough.
 
 ---
 
 ### Step 3 — Configure Packer Variables
 
-Copy the template and fill in all values:
+Copy the example and fill in all values. The templates are legacy JSON, so the variables file must be JSON too (an HCL `.pkrvars.hcl` file fails with `Error reading variables`):
 
 ```powershell
-copy packer\variables\win_server_2025.json.example packer\variables\win_server_2025.json
+Copy-Item packer\variables\win_server_2025.json.example packer\variables\win_server_2025.json
 ```
 
-The filled-in file is git-ignored — never commit it (it contains the service principal secret).
+```bash
+cp packer/variables/win_server_2025.json.example packer/variables/win_server_2025.json
+```
+
+Leave `vda_location` and `optimizer_location` out: they are the download paths *on the build VM* and the template defaults are correct.
+
+`vda_sha256` and `optimizer_sha256` are required: the build stops without them. `vda_signer` (default `Citrix Systems, Inc.`) is the organization the VDA installer's signature must come from. Leave `image_version` at `latest`: the build script resolves it to the exact marketplace version and records it.
+
+Leave `userpass` out. Packer generates a one-time WinRM password for each build VM and filters it from its logs, so there's no password to store.
+
+Leave the three `virtual_network_*` keys empty unless your subscription forbids public IPs. Then see [Private-network builds](#private-network-builds-no-public-ip) under Step 4.
+
+The filled-in file is git-ignored, but never commit it anyway: in `ServicePrincipal` mode it holds the client secret.
 
 #### Gen2 SKU selection
 
@@ -342,12 +390,16 @@ Using the non-g2 SKU (`2025-datacenter`) builds a Gen1 image. The resulting cata
 
 #### Optimizer template names
 
+`optimizer_template` must be the exact file name from the `Templates` folder of your Optimizer zip. The names carry a build suffix that can change between Optimizer releases. These are from Citrix Optimizer 2.9:
+
 | OS | optimizer_template value |
 |----|--------------------------|
-| Windows Server 2025 | `Citrix_Windows_Server_2025.xml` |
-| Windows Server 2022 | `Citrix_Windows_Server_2022.xml` |
-| Windows Server 2019 | `Citrix_Windows_Server_2019.xml` |
+| Windows Server 2025 | `Citrix_Windows_Server_2025_2009.xml` |
+| Windows Server 2022 | `Citrix_Windows_Server_2022_2009.xml` |
+| Windows Server 2019 | `Citrix_Windows_Server_2019_1809.xml` |
 | Windows 11 23H2     | `Citrix_Windows_11_2009.xml` |
+
+`01-upload-installers.ps1` prints the template names in the zip you upload. If `optimizer_template` isn't one of them, the build stops right after the installer download, before the VDA install, and lists the names the zip has.
 
 ---
 
@@ -357,37 +409,138 @@ Using the non-g2 SKU (`2025-datacenter`) builds a Gen1 image. The resulting cata
 .\packer\scripts\powershell\02-build.ps1 `
     -VarsFile win_server_2025.json `
     -Os win_server_2025_dc `
-    -VdaVersion v2507
+    -VdaVersion v2507 `
+    -AllowedInboundIp 203.0.113.10/32
 ```
 
-Build time is approximately 40–50 minutes. The build script clones `citrix-packer-tools` automatically if not present.
+Add `-KeepOnError` when you're chasing a failing build: the build VM then survives a failure so you can inspect it (see [Troubleshooting → A build fails or hangs](troubleshooting.md#a-build-fails-or-hangs-getting-into-the-build-vm)).
 
-At completion Packer outputs:
+`-AllowedInboundIp` is the address your traffic leaves from. By default Packer reaches the build VM over WinRM through a public IP, and without this setting its network rule allows any source. The script refuses to build without it. Behind a corporate proxy with several egress addresses, give the range your network team provides.
+
+#### Private-network builds (no public IP)
+
+Many enterprise subscriptions deny public IP addresses by policy; Azure Landing Zone "corp" policies do, for example. The default build then fails within a minute with `InvalidTemplateDeployment` and `policy violation`. In that case, build on your own network:
+
+| You need | Details |
+|---|---|
+| **A subnet for the build VM** | An existing subnet, in the **same subscription and region** as the build resource group (a NIC can't join a VNet in another subscription). The build VM needs outbound HTTPS, through your firewall or NAT, to your storage account (the installers) and, if you install browsers, to `dl.google.com` and `download.mozilla.org`. It needs no inbound access from outside the VNet. If the VNet uses custom DNS servers (for example, domain controllers), they must be running during the build. |
+| **A machine to run the build from** | Something that can reach the subnet on TCP 5986 (WinRM over HTTPS): a small VM in the same or a peered VNet, or a self-hosted CI agent. It needs PowerShell 7, Azure CLI, Packer and git, plus outbound HTTPS to Azure Resource Manager, Microsoft Entra ID and GitHub (for the Packer plugin and `citrix-packer-tools`). On an Azure VM, run `az login --identity` first: Packer then signs in as the VM's managed identity, and no secret is stored on the machine. |
+| **Permission to join the subnet** | The identity Packer runs as needs `Microsoft.Network/virtualNetworks/subnets/join/action` on the subnet, in addition to Contributor on the build resource group. Network Contributor scoped to just that subnet is enough. |
+
+Then set the three keys in your vars file:
+
+```json
+"virtual_network_name":                "vnet-build",
+"virtual_network_subnet_name":         "snet-image-build",
+"virtual_network_resource_group_name": "rg-network"
+```
+
+With `virtual_network_name` set, `02-build.ps1` runs a private-network build:
+
+- Packer creates no VNet, public IP or network security group.
+- The build VM's NIC joins your subnet, so the subnet's own network security group and routes apply.
+- `allowed_inbound_ip` and `-AllowedInboundIp` are ignored. Packer refuses them alongside `virtual_network_name`, so the script builds from a temporary copy of the template without that setting.
+
+Run `02-build.ps1` from the machine inside the network. Steps 1, 2, 5 and 6 can still run from your workstation, because they only call Azure and Citrix Cloud APIs.
+
+Build time is about 1 hour, plus 5–60 minutes for Windows Update depending on how far behind the marketplace image is. The build script clones `citrix-packer-tools` automatically if not present.
+
+#### Windows Update
+
+`02-build.ps1` installs Windows updates **before anything else**, so the VDA and apps go onto a patched OS. It renders a temporary copy of the template with a [`windows-update`](https://github.com/rgl/packer-plugin-windows-update) provisioner (plugin v0.18.5, installed by the script) as the first step:
+
+- **Excluded:** Preview updates, and **KB5007651** (the Defender "Windows Security platform" update). KB5007651 is offered again after every install, so without the exclusion the provisioner loops indefinitely: six install-and-reboot cycles about three minutes apart before we stopped it.
+- **`-WindowsUpdateExclude KB…`** adds exclusions, by KB number or title text, if another update loops or breaks a build.
+- **`-SkipWindowsUpdate`** leaves it out. Use it only for quick test builds; an image for users should be patched.
+
+#### Apps (optional)
+
+Pass an app list to install apps into the image:
+
+```powershell
+.\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -AppsFile example.apps.txt
+```
+
+- **The list** is a text file of [Chocolatey](https://community.chocolatey.org/packages) package IDs, one per line. `#` starts a comment, and `id version` pins a version. Start from [`packer/apps/example.apps.txt`](../packer/apps/example.apps.txt); keep one list per image or persona.
+- **When it runs:** after the template's own steps (VDA, Optimizer, browsers) and just before cleanup, followed by a restart, because some installers need one.
+- **Failures stop the build.** Exit codes 0, 1641 and 3010 pass; anything else fails the build and names the package.
+- **What went in:** the build log lists every installed package and version (`installed-app:` lines). Pin versions in the list when you need a build to be repeatable.
+- **Chocolatey itself** is installed from its pinned release MSI (2.7.4). The build VM checks the MSI against a recorded SHA-256 and its Chocolatey Software signature before installing it, and stops on a mismatch. `-ChocoMsiUrl <url>` downloads the same file from your own mirror; the same checks apply. To upgrade, change `$chocoVersion` and `$chocoMsiSha256` in `02-build.ps1` together.
+- **Internal feed:** `-ChocoSource <url>` installs the packages from your own feed and disables the community source.
+- **Why not winget:** its community source fails to initialize in Packer's unattended WinRM session (`0x8a15000f`, "Data required by the source is missing"), even after bootstrapping App Installer.
+
+At completion Packer outputs the gallery image version it published:
 
 ```
-ManagedImageName: win_server_2025_dc_202607160709
-ManagedImageOSDiskSnapshotName: win_server_2025_dc_202607160709
+ManagedImageSharedImageGalleryId: /subscriptions/<sub>/resourceGroups/rg-flex-packer-build/providers/Microsoft.Compute/galleries/FlexPackerGallery/images/WinServer2025DC/versions/1.0.0
+SharedImageGalleryImageVersion: 1.0.0
 ```
 
-Note both names — they are identical. You will pass the snapshot name to `03-export-image.ps1`.
+Bump `gallery_image_version` in your vars file for every build: a published version cannot be overwritten.
+
+For patching, app changes, upgrades and rollback over time, see [Managing Images](managing-images.md).
+
+#### What the build verifies and records
+
+**Before installing anything**, the build VM checks what it downloaded (`packer/scripts/provisioners/get-installers.ps1`):
+
+- **Hashes:** the VDA installer and the Optimizer zip must match `vda_sha256` and `optimizer_sha256`.
+- **Signature:** the VDA installer's Authenticode signature must be `Valid`, from `O=Citrix Systems, Inc.` (`vda_signer`).
+- **Optimizer template:** `optimizer_template` must exist in the zip.
+
+Any failure stops the build. It downloads with `curl.exe` and logs each download's time and speed.
+
+**Pinned inputs**, so two builds from the same commit and vars file get the same parts:
+
+| Input | Pinned to | Change it with |
+|---|---|---|
+| citrix-packer-tools (VDA, Optimizer and cleanup scripts) | the commit this repo was last validated with | `-PackerToolsRef <commit or tag>` |
+| Marketplace image | `latest` resolved to an exact version before the build | `image_version` in the vars file |
+| Packer plugins | azure v2.6.5, windows-update v0.18.5 | the script (legacy JSON uses the newest installed plugin, so the script warns if that isn't the pinned one) |
+| Chocolatey | 2.7.4 | the script |
+
+**The build record.** After a successful build (and only then), `02-build.ps1` writes `build-records/<image>-<version>.json` with:
+- the installers' names, hashes, signer and thumbprint;
+- the exact base image version and the citrix-packer-tools commit;
+- the Windows updates installed and those excluded;
+- the apps with versions;
+- the OS build, and the build VM's Secure Boot and TPM state;
+- the download times;
+- the Packer and plugin versions.
+
+It uploads a copy to the `build-records` container of your storage account, and tags the gallery version with the key fields (`vda`, `vdaSha256`, `baseImage`, `packerTools`, `buildRecord`). The full Packer log sits next to it in `build-records/`.
 
 #### What Packer does internally
 
 Understanding the build sequence prevents the "wrong VHD" mistake:
 
-1. Creates a temporary resource group and deploys a VM from the marketplace image
-2. Runs all provisioners (VDA install, restart, VDA install phase 2, Ngen, Optimizer, Chrome, cleanup)
+1. Deploys a VM from the marketplace image into the build resource group
+2. Installs Windows updates (unless `-SkipWindowsUpdate`), then runs the template's provisioners (VDA install, restart, VDA install phase 2, Ngen, Optimizer, Chrome, cleanup)
 3. **Powers off the VM**
-4. **Snapshots the OS disk** — this snapshot is the correct source for Citrix MCS
-5. Calls Azure's Generalize API on the VM (marks the OS as sysprepped)
-6. Captures a Managed Image from the generalized disk
-7. Deletes the temporary resource group
-
-The snapshot (step 4) is taken from a running, non-sysprepped disk. The managed image (step 6) is taken after generalization. Citrix needs the non-sysprepped disk — always use the snapshot.
+4. **Publishes the OS disk (and its VM guest state) straight into the gallery image version.** With `"specialized": true` Packer skips the Generalize call, so the disk stays non-sysprepped — the state Citrix MCS needs
+5. Deletes the build VM and its temporary resources
 
 ---
 
-### Step 5 — Export Snapshot VHD
+### Step 5 — Export the Gallery Version to VHD
+
+```powershell
+.\packer\scripts\powershell\04-export-from-gallery.ps1 `
+    -GallerySubscriptionId "your-azure-subscription-id" `
+    -GalleryResourceGroup  rg-flex-packer-build `
+    -GalleryName           FlexPackerGallery `
+    -ImageDefinition       WinServer2025DC `
+    -ImageVersion          1.0.0 `
+    -DestStorageAccount    flexpackerbuild `
+    -DestResourceGroup     rg-flex-packer-build `
+    -DestSubscriptionId    "your-azure-subscription-id"
+```
+
+The script creates a temporary managed disk from the gallery version, copies the OS VHD and the VMGS blob to `vhd-output` with AzCopy, deletes the temporary disk, and prints `vhd_uri` and `guest_disk_uri` with read SAS tokens. See [Exporting from Azure Compute Gallery](#exporting-from-azure-compute-gallery-customer-provided-images) for how it works.
+
+#### Snapshot-based builds (`03-export-image.ps1`)
+
+If you have a Packer OS-disk snapshot instead (a managed-image build), export it with:
 
 ```powershell
 .\packer\scripts\powershell\03-export-image.ps1 `
@@ -481,12 +634,172 @@ Catalog creation takes 35–40 minutes. It provisions the Azure VMs, domain-join
 
 When you build a new version:
 
-1. Run steps 4–5 to produce a new snapshot and VHD URI
+1. Bump `gallery_image_version`, then run steps 4–5 to produce a new gallery version and VHD URI
 2. Update `vhd_uri` in `terraform.tfvars` with the new SAS URI
 3. Update `image_name` if you want a versioned name in the Citrix library
 4. `terraform apply`
 
 Terraform will update the template image in place and trigger Citrix to update the catalog. Existing sessions are not interrupted; machines are re-imaged on next restart.
+
+> **Two warnings, from updates made through the API** (the Terraform path sits on the same service but is untested here):
+> - **The new image's generation and Trusted Launch flags must match the catalog's.** If `hyperVGen`, `vtpmEnabled` or `secureBootEnabled` differ, the update reports success and then the catalog quietly goes back to the old image. So you can't move an existing catalog from a non-Trusted Launch image to a Trusted Launch one this way: create a new catalog from the new image.
+> - **Static (dedicated) single-session catalogs are re-provisioned**, and the users' disks don't survive.
+>
+> [`07-update-catalog-image.ps1`](#update-a-catalogs-image) checks both before it changes anything, and confirms afterwards that the update held.
+
+---
+
+## Lifecycle with the API
+
+Three scripts take an image through Citrix with the Quick Deploy API instead of Terraform: import it, move a catalog to it, and delete a domain-joined catalog. Use them in a scripted pipeline, to update the image of a catalog that already exists, or to delete a domain-joined catalog that `terraform destroy` can't.
+
+| Script | What it does | What it changes |
+|---|---|---|
+| `06-import-to-citrix.ps1` | Imports the exported OS VHD and VMGS, waits for `Ready`, reads back the generation and Trusted Launch flags | Adds an image to the library |
+| `07-update-catalog-image.ps1` (test script) | Pre-checks, the image update, then a read-back that catches a silent revert | The catalog's image; machines restart onto it |
+| `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
+
+`07` and `08` take `-CatalogName` or `-CatalogId`. All three are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
+
+### Credentials and site ID
+
+The scripts read the API client from the same environment variables as the Citrix Terraform provider:
+
+```powershell
+$env:CITRIX_CUSTOMER_ID   = "your-customer-id"
+$env:CITRIX_CLIENT_ID     = "your-api-client-id"
+$env:CITRIX_CLIENT_SECRET = "your-api-client-secret"   # from your secret manager
+```
+
+- **The client secret** is read from `CITRIX_CLIENT_SECRET` only, never from a parameter, so it stays out of your shell history. It's sent once, to the token endpoint, and never printed.
+- **The token** comes from `POST https://api.cloud.com/cctrustoauth2/root/tokens/clients` (client credentials). Calls send it as `Authorization: CwsAuth Bearer=<token>`. That's Citrix's `CwsAuth` scheme, not a plain `Bearer` header. Tokens last an hour, and the scripts renew them during long waits.
+- **The site ID:** image and catalog calls are site-scoped, `/catalogservice/{customerId}/{siteId}/...`. The console doesn't show the site ID. The scripts read it from `GET https://api.cloud.com/cvad/manage/me` (`Customers[0].Sites[0].Id`); pass `-SiteId` to skip the lookup.
+- **Outside the US**, pass `-ApiHost`: `api-eu.cloud.com`, `api-ap-s.cloud.com` or `api.citrixcloud.jp`.
+
+### Import an image
+
+After [Step 5](#step-5--export-the-gallery-version-to-vhd), pass the two URIs the export printed:
+
+```powershell
+.\packer\scripts\powershell\06-import-to-citrix.ps1 `
+    -Name         WinServer2025DC-1.1.0 `
+    -VhdUri       "<vhd_uri from the export>" `
+    -GuestDiskUri "<guest_disk_uri from the export>" `
+    -Region       eastus
+```
+
+**Before it calls Citrix,** the script checks that:
+- both URIs carry a read SAS that hasn't expired (it warns under two hours left);
+- Secure Boot has its VMGS blob;
+- no image already has that name.
+
+**It sends** `POST https://api.cloud.com/catalogservice/{customerId}/{siteId}/images/$import`:
+
+```json
+{
+  "name": "WinServer2025DC-1.1.0",
+  "vhdUri": "<vhd_uri>",
+  "vhdEncryptionUri": "<guest_disk_uri>",
+  "osPlatform": "Windows",
+  "region": "eastus",
+  "hyperVGen": "V2",
+  "vtpmEnabled": true,
+  "secureBootEnabled": true,
+  "notes": "Imported by flex-image-builder 06-import-to-citrix.ps1"
+}
+```
+
+**Then it waits** while the image goes `Pending` → `Importing` → `Ready`, usually 15–25 minutes.
+
+**Then it reads back** `hyperVGen`, `vtpmEnabled` and `secureBootEnabled` from the image. It fails unless all three are what it asked for. The API ignores fields it doesn't recognize and still returns success (see the [field map](#terraform--api-field-map)), so this read-back is the only proof the image is right.
+
+Trusted Launch (Gen2, vTPM, Secure Boot) is the default. For a Gen2 image without guest state, add `-NoSecureBoot` and leave out `-GuestDiskUri`; vTPM alone works from a plain Gen2 VHD.
+
+To check an image that's already imported, or to keep waiting after a timeout, run `06-import-to-citrix.ps1 -ImageId <id>`. Add the same `-NoSecureBoot` / `-NoVtpm` you imported with.
+
+> **Use the site-scoped route.** `POST /catalogservice/{customerId}/images`, without the site ID, looks right but is the bring-your-own-subscription route. Its images stay `Pending` forever. See [Troubleshooting](troubleshooting.md#an-imported-image-stays-pending-forever).
+
+### Update a catalog's image
+
+> **Test script.** `07-update-catalog-image.ps1` isn't yet validated for production. Use it on a test catalog.
+
+Run the checks first. `-CheckOnly` makes no changes:
+
+```powershell
+.\packer\scripts\powershell\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id> -CheckOnly
+.\packer\scripts\powershell\07-update-catalog-image.ps1 -CatalogName "Task Worker Desktop" -ImageId <image id> -VdaUpdateDelay 60
+```
+
+**Pre-checks.** The script stops, and changes nothing, unless all of these hold:
+- the new image is `Ready`;
+- it has the catalog's session type (single- or multi-session);
+- the catalog is `Active` or `InputRequired`;
+- its `hyperVGen`, `vtpmEnabled` and `secureBootEnabled` match the catalog's **current image**. A mismatch is the silent revert described under [Updating an Image](#updating-an-image);
+- the catalog isn't static (dedicated) single-session. Those machines are re-provisioned and users lose their disks; `-Force` overrides this check only.
+
+**The update** is `POST .../catalogs/{catalogId}/$updateImage` with `{"TemplateId": "<image id>", "CitrixPrepared": false, "VdaUpdateDelay": 0}`, in that exact casing. `CitrixPrepared` is `false` for an image you imported; the script takes it from the image. `-VdaUpdateDelay` sets when machines restart onto the new image. It has no default, so without it (or `-CheckOnly`) the script stops before it connects. The choices:
+
+| `-VdaUpdateDelay` | Machines restart |
+|---|---|
+| `0` | now, all of them; sessions on them end |
+| `-1` | at each machine's next shutdown |
+| `N` | spread over N minutes, with a warning to users first |
+
+**The read-back.** The script waits for the catalog to go `Processing` → `Active`. It waits `-SettleMinutes` more (default 5), because a revert shows up only after the update has reported success. Then it confirms the catalog's `imageId` is the new image, and fails if it isn't.
+
+> **Citrix-prepared images report the wrong generation in their detail view.** `GET .../images/{id}` returns `hyperVGen: V1` (and no region) for Citrix-prepared Gen2 images. The image list, `GET .../images`, has the right value. The script compares flags from the list, and says so when the two disagree.
+
+### Delete a domain-joined catalog
+
+A domain-joined catalog's delete needs the domain service account, so the backend can remove the machines' computer accounts. Without it, the delete ends in `Error` (`ErrorDeletionUnknown`). The Terraform provider's delete doesn't send the credentials, even though they're in state, so `terraform destroy` fails this way. Sending a credentialed delete again also recovers a catalog left in `Error` by an earlier delete.
+
+```powershell
+$env:TF_VAR_domain_service_account_password = "<join account password>"   # same variable Terraform uses
+.\packer\scripts\powershell\08-delete-catalog.ps1 -CatalogName "Task Worker Desktop" -WhatIf
+.\packer\scripts\powershell\08-delete-catalog.ps1 -CatalogName "Task Worker Desktop"
+```
+
+The script asks you to confirm. It sends `DELETE .../catalogs/{catalogId}?async=true` with `Content-Type: application/json` (without that header the call fails with HTTP 415), and this body:
+
+```json
+{"forceDelete": false, "deleteVm": true, "deleteResourceLocationIfUnused": false,
+ "serviceAccount": "<account>", "serviceAccountPassword": "<password>"}
+```
+
+Then it polls `GET .../catalogs/status?catalogId={catalogId}` until the catalog is `NotFound`, usually 8–15 minutes.
+
+- **The account** defaults to the one the catalog was created with. Pass `-ServiceAccount` to use another.
+- **The password** comes from the environment variable named by `-PasswordVariable` (default `TF_VAR_domain_service_account_password`) and is never printed.
+- **Your domain controllers must be running.** The delete reaches AD through the catalog's connectors.
+- **`-DeleteResourceLocationIfUnused`** also removes the catalog's resource location and its connectors when no other catalog uses them. The connectors' computer accounts can stay behind in AD; remove them yourself.
+
+**With Terraform, the order matters:**
+
+1. `08-delete-catalog.ps1 -CatalogName <name> -TerraformDir <example dir>`: the credentialed delete, the wait for `NotFound`, then `terraform state rm` for the catalog. The address defaults to `module.catalog.citrix_quickdeploy_catalog.this`; set `-TerraformAddress` for another one.
+2. `terraform destroy` for everything else.
+
+If you run `terraform destroy` while the delete is still running, the provider's own delete fails with "Deletion of this catalog is already in progress", and the destroy stops.
+
+### Terraform ↔ API field map
+
+The Quick Deploy API reads request bodies leniently. It drops property names it doesn't recognize, with no warning, and the call still succeeds. A field named as in Terraform is the easy mistake:
+
+- sending `machineGeneration: "V2"` imports a **Gen1** image, and a later catalog update with it reverts;
+- sending `guestDiskUri` imports no guest state.
+
+| Terraform (`citrix_quickdeploy_template_image`) | Quick Deploy API (`.../images/$import`) |
+|---|---|
+| `machine_generation` | `hyperVGen` |
+| `vhd_uri` | `vhdUri` |
+| `guest_disk_uri` | `vhdEncryptionUri` |
+| `vtpm_enabled` | `vtpmEnabled` |
+| `secure_boot_enabled` | `secureBootEnabled` |
+| `os_platform` | `osPlatform` |
+| `notes` | `notes` |
+
+For catalog naming, the API shape is `"machineNamingScheme": {"namingScheme": "abc##", "isSchemeTypeNumeric": true}`. Sending `namingSchemeType: "Numeric"` names machines alphabetically.
+
+The API names come from Citrix's public Go SDK models ([`ImportTemplateImageModel`](https://github.com/citrix/citrix-daas-rest-go/blob/main/citrixquickdeploy/docs/ImportTemplateImageModel.md)). **Rule of thumb:** after any import, read back `hyperVGen`, `vtpmEnabled` and `secureBootEnabled` before you use the image; `06-import-to-citrix.ps1 -ImageId <id>` does that.
 
 ---
 
@@ -516,7 +829,7 @@ $catalogs = Invoke-RestMethod -Uri "https://api.cloud.com/catalogservice/<custom
 $catalogs.items | Where-Object { $_.name -eq "YourCatalogName" } | Select-Object id, name, state
 ```
 
-> The `<site_id>` GUID is not shown in the Citrix UI. Find it by enabling Terraform debug logging (`TF_LOG=DEBUG`) and searching the output for `catalogservice/<customer_id>/` — the GUID after the customer ID is the site ID.
+> The `<site_id>` GUID is not shown in the Citrix UI. Get it from `GET https://api.cloud.com/cvad/manage/me` with the same headers: it's `Customers[0].Sites[0].Id`. (Or enable Terraform debug logging, `TF_LOG=DEBUG`, and search the output for `catalogservice/<customer_id>/`: the GUID after the customer ID is the site ID.)
 
 **2. Import the catalog into Terraform state:**
 

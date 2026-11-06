@@ -26,7 +26,7 @@ param(
     [Parameter(Mandatory)] [string]$StorageAccount,
     [Parameter(Mandatory)] [string]$SubscriptionId,
     [string]$OutputContainer = "vhd-output",
-    [int]$SasDays = 7
+    [ValidateRange(1,7)] [int]$SasDays = 7   # user-delegation SAS: 7 days max
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,7 +35,7 @@ $ErrorActionPreference = "Stop"
 $azCopy = Get-Command azcopy -ErrorAction SilentlyContinue
 if (-not $azCopy) {
     $azCopy = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter azcopy.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $azCopy) { Write-Error "azcopy not found. Install with: winget install Microsoft.Azure.AzCopy.10" }
+    if (-not $azCopy) { Write-Error "azcopy not found on PATH. Install with: winget install Microsoft.Azure.AzCopy.10 (Windows) or brew install azcopy (macOS)" }
     $azCopyExe = $azCopy.FullName
 } else {
     $azCopyExe = $azCopy.Source
@@ -94,18 +94,16 @@ if ($vmgsSas) {
     Write-Host "  Proceeding with OS disk only. Secure Boot will not be available."
 }
 
-# Storage account key for destination SAS generation
-# !! Use UtcNow — (Get-Date) returns LOCAL time. Appending "Z" tells Azure it's UTC, which is
-# !! wrong on machines not in UTC. Azure rejects the SAS if expiry is before signed-start time.
-$saKey   = (az storage account keys list --account-name $StorageAccount --resource-group $ResourceGroup --query "[0].value" -o tsv)
-$expiry  = [System.DateTime]::UtcNow.AddHours(25).ToString("yyyy-MM-ddTHH:mmZ")
+# Destination writes: AzCopy signs in with your az CLI session (AZCOPY_AUTO_LOGIN_TYPE=AZCLI),
+# so no storage account key or write SAS is needed. The read SAS handed to Citrix is a
+# user-delegation SAS: signed with your Entra sign-in, max 7 days, revocable with
+# `az storage account revoke-delegation-keys`. Needs Storage Blob Data Contributor on the account.
+$env:AZCOPY_AUTO_LOGIN_TYPE = "AZCLI"
+# !! SAS expiry: use UtcNow — (Get-Date) returns LOCAL time; appending "Z" mislabels it as UTC.
 
 # ── OS disk copy ──────────────────────────────────────────────────────────────
-$destContainerSas = (az storage container generate-sas `
-    --account-name $StorageAccount --account-key $saKey `
-    --name $OutputContainer --permissions rcw --expiry $expiry -o tsv)
 $osBlobName = "$SnapshotName.vhd"
-$osDestUrl  = "https://$StorageAccount.blob.core.windows.net/$OutputContainer/$osBlobName`?$destContainerSas"
+$osDestUrl  = "https://$StorageAccount.blob.core.windows.net/$OutputContainer/$osBlobName"
 
 Write-Host "`nCopying OS disk snapshot via AzCopy (~10-15 minutes for a 130 GB disk)..."
 & $azCopyExe copy $sourceSas $osDestUrl --blob-type PageBlob
@@ -115,15 +113,15 @@ if ($LASTEXITCODE -ne 0) { Write-Error "AzCopy (OS disk) failed with exit code $
 $vmgsUri = $null
 if ($vmgsSas) {
     $vmgsBlobName = "$SnapshotName-vmgs.vhd"
-    $vmgsDestUrl  = "https://$StorageAccount.blob.core.windows.net/$OutputContainer/$vmgsBlobName`?$destContainerSas"
+    $vmgsDestUrl  = "https://$StorageAccount.blob.core.windows.net/$OutputContainer/$vmgsBlobName"
 
     Write-Host "`nCopying VMGS (VM Guest State) disk via AzCopy..."
     & $azCopyExe copy $vmgsSas $vmgsDestUrl --blob-type PageBlob
     if ($LASTEXITCODE -ne 0) { Write-Error "AzCopy (VMGS) failed with exit code $LASTEXITCODE" }
 
-    $blobExpiry = (Get-Date).AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
+    $blobExpiry = [System.DateTime]::UtcNow.AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
     $vmgsBlobSas = (az storage blob generate-sas `
-        --account-name $StorageAccount --account-key $saKey `
+        --account-name $StorageAccount --as-user --auth-mode login `
         --container-name $OutputContainer --name $vmgsBlobName `
         --permissions r --expiry $blobExpiry --https-only -o tsv)
     $vmgsUri = "https://$StorageAccount.blob.core.windows.net/$OutputContainer/$vmgsBlobName`?$vmgsBlobSas"
@@ -134,9 +132,9 @@ try { Invoke-RestMethod -Method POST -Uri "$baseUrl/endGetAccess?api-version=202
 Start-Sleep -Seconds 2
 
 # ── Output blob SAS for the OS VHD ───────────────────────────────────────────
-$blobExpiry = (Get-Date).AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
+$blobExpiry = [System.DateTime]::UtcNow.AddDays($SasDays).ToString("yyyy-MM-ddTHH:mmZ")
 $osBlobSas  = (az storage blob generate-sas `
-    --account-name $StorageAccount --account-key $saKey `
+    --account-name $StorageAccount --as-user --auth-mode login `
     --container-name $OutputContainer --name $osBlobName `
     --permissions r --expiry $blobExpiry --https-only -o tsv)
 $vhdUri = "https://$StorageAccount.blob.core.windows.net/$OutputContainer/$osBlobName`?$osBlobSas"

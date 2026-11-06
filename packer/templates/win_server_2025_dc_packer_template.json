@@ -6,6 +6,7 @@
     "client_object_id": "",
     "client_tenant_id": "",
     "client_subscription_id": "",
+    "use_azure_cli_auth": "true",
 
     "image_resource_group": "",
     "optimizer_template": "",
@@ -13,11 +14,18 @@
     "managed_identity_id": "",
     "vda_blob_url": "",
     "optimizer_blob_url": "",
+    "vda_sha256": "",
+    "optimizer_sha256": "",
+    "vda_signer": "Citrix Systems, Inc.",
+    "image_version": "latest",
     "vda_location": "C:\\Windows\\Temp\\VDASetup.exe",
     "optimizer_location": "C:\\Windows\\Temp\\CitrixOptimizer.zip",
 
     "image_name": "win_server_2025_dc",
     "gallery_image_version": "1.0.0",
+    "gallery_name": "FlexPackerGallery",
+    "gallery_image_name": "WinServer2025DC",
+    "location": "East US",
     "location_setup": "c:\\setup",
 
     "install_browser_chrome_flag": "true",
@@ -28,6 +36,11 @@
     "script_installchrome":  "install-browser-chrome.ps1",
     "script_installfirefox": "install-browser-firefox.ps1",
     "script_cleanup":        "run-cleanup.ps1",
+
+    "allowed_inbound_ip": "",
+    "virtual_network_name": "",
+    "virtual_network_subnet_name": "",
+    "virtual_network_resource_group_name": "",
 
     "username": "packer",
     "userpass": "",
@@ -41,25 +54,26 @@
     "tenant_id":       "{{user `client_tenant_id`}}",
     "subscription_id": "{{user `client_subscription_id`}}",
     "object_id":       "{{user `client_object_id`}}",
-
-    "managed_image_os_disk_snapshot_name": "{{user `image_name`}}_{{ isotime \"200601020304\" }}",
-    "managed_image_resource_group_name":   "{{user `image_resource_group`}}",
+    "use_azure_cli_auth": "{{user `use_azure_cli_auth`}}",
 
     "shared_image_gallery_destination": {
       "subscription":        "{{user `client_subscription_id`}}",
       "resource_group":      "{{user `image_resource_group`}}",
-      "gallery_name":        "FlexPackerGallery",
-      "image_name":          "WinServer2025DC",
+      "gallery_name":        "{{user `gallery_name`}}",
+      "image_name":          "{{user `gallery_image_name`}}",
       "image_version":       "{{user `gallery_image_version`}}",
-      "replication_regions": ["East US"]
+      "replication_regions": ["{{user `location`}}"],
+      "specialized":         true
     },
 
     "os_type":          "Windows",
     "image_publisher":  "MicrosoftWindowsServer",
     "image_offer":      "WindowsServer",
     "image_sku":        "2025-datacenter-g2",
-    "image_version":    "latest",
+    "image_version":    "{{user `image_version`}}",
     "security_type":    "TrustedLaunch",
+    "secure_boot_enabled": true,
+    "vtpm_enabled":     true,
 
     "communicator":    "winrm",
     "winrm_use_ssl":   true,
@@ -70,11 +84,16 @@
 
     "user_assigned_managed_identities": ["{{user `managed_identity_id`}}"],
 
+    "allowed_inbound_ip_addresses": ["{{user `allowed_inbound_ip`}}"],
+    "virtual_network_name": "{{user `virtual_network_name`}}",
+    "virtual_network_subnet_name": "{{user `virtual_network_subnet_name`}}",
+    "virtual_network_resource_group_name": "{{user `virtual_network_resource_group_name`}}",
+
     "azure_tags": {
       "Image": "Packer Generated"
     },
 
-    "location": "East US",
+    "build_resource_group_name": "{{user `image_resource_group`}}",
     "vm_size":  "Standard_D2s_v3"
   }],
   "provisioners": [
@@ -86,39 +105,41 @@
     },
     {
       "type": "file",
-      "source":      ".\\{{user `script_installvda`}}",
+      "source":      "./{{user `script_installvda`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_installvda`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_optimizer`}}",
+      "source":      "../scripts/{{user `script_optimizer`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_optimizer`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_installchrome`}}",
+      "source":      "../scripts/{{user `script_installchrome`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_installchrome`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_installfirefox`}}",
+      "source":      "../scripts/{{user `script_installfirefox`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_installfirefox`}}"
     },
     {
       "type": "file",
-      "source":      "..\\scripts\\{{user `script_cleanup`}}",
+      "source":      "../scripts/{{user `script_cleanup`}}",
       "destination": "{{user `location_setup`}}\\{{user `script_cleanup`}}"
     },
     {
       "type": "powershell",
-      "inline": [
-        "$token = (Invoke-RestMethod -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://storage.azure.com/' -Headers @{Metadata='true'}).access_token",
-        "$hdrs = @{ Authorization = \"Bearer $token\"; 'x-ms-version' = '2020-04-08' }",
-        "Write-Host 'Downloading VDA installer via managed identity...'",
-        "Invoke-WebRequest -Uri '{{user `vda_blob_url`}}' -Headers $hdrs -OutFile '{{user `vda_location`}}' -UseBasicParsing",
-        "Write-Host 'Downloading Citrix Optimizer via managed identity...'",
-        "Invoke-WebRequest -Uri '{{user `optimizer_blob_url`}}' -Headers $hdrs -OutFile '{{user `optimizer_location`}}' -UseBasicParsing",
-        "Write-Host 'Downloads complete.'"
+      "script": "../../../packer/scripts/provisioners/get-installers.ps1",
+      "environment_vars": [
+        "VDA_URL={{user `vda_blob_url`}}",
+        "VDA_PATH={{user `vda_location`}}",
+        "VDA_SHA256={{user `vda_sha256`}}",
+        "VDA_SIGNER={{user `vda_signer`}}",
+        "OPTIMIZER_URL={{user `optimizer_blob_url`}}",
+        "OPTIMIZER_PATH={{user `optimizer_location`}}",
+        "OPTIMIZER_SHA256={{user `optimizer_sha256`}}",
+        "OPTIMIZER_TEMPLATE={{user `optimizer_template`}}"
       ]
     },
     {
