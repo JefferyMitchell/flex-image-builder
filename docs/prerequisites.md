@@ -29,6 +29,24 @@ nav_order: 2
 
 The Network Connection ID (a GUID) is found in **Citrix DaaS > Manage > Network Connections**.
 
+### Recommended connectivity: dual ExpressRoute
+
+Citrix-managed capacity peers with a VNet you manage, and that VNet connects to your locations. [Citrix leaves that connection up to you](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html). For production, start with two metered ExpressRoute circuits at different peering locations:
+
+| Component | Recommendation |
+|---|---|
+| **Primary circuit** | 10 Gbps, Standard, metered data, at peering location A |
+| **Secondary circuit** | 5 Gbps, Standard, metered data, at peering location B |
+| **ExpressRoute gateway** | Ultra Performance or ErGw3AZ, shared by both circuits. [Rated for 10 Gbps](https://learn.microsoft.com/en-us/azure/expressroute/expressroute-faqs) |
+
+**Plan for these:**
+
+- **Failover capacity:** if the primary fails, the secondary carries only 5 Gbps. Check that this covers your traffic, or size the secondary to match.
+- **Costs:** a monthly fee for each circuit, an hourly fee for the gateway, and outbound data on whichever circuit carries it. Inbound is free. Carrier and cross-connect fees are extra. Metered plans suit most environments, but compare them with unlimited plans if you send a lot of data out. Get current rates from the [Azure pricing calculator](https://azure.microsoft.com/en-us/pricing/calculator/), and confirm them before you quote them.
+- **Address space:** the peered range [can't overlap](https://docs.citrix.com/en-us/citrix-daas-azure/network-connections.html) any address in Azure or on-premises.
+
+A [test lab](lab-environment.md) doesn't need ExpressRoute.
+
 ## Active Directory (domain-joined catalogs only)
 
 - A **dedicated service account** (e.g. `flexsp`) with:
