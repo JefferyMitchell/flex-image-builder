@@ -7,6 +7,10 @@
 # deleteVm and deleteResourceLocationIfUnused, so `terraform destroy` fails the same way. Sending this
 # credentialed delete again also recovers a catalog left in Error by an earlier delete.
 #
+# Run deletes one at a time. Two credentialed deletes sent together can leave one of them in Error
+# (ErrorDeletionUnknown, "Caller passed an invalid input", HTTP 400 with an empty body). If a delete
+# ends in Error, re-run this script for that catalog on its own: it sends the credentialed delete again.
+#
 # With Terraform, the order matters:
 #   1. .\08-delete-catalog.ps1 -CatalogName <name> -TerraformDir <dir>   # delete, wait for NotFound, state rm
 #   2. terraform destroy                                                 # everything else
