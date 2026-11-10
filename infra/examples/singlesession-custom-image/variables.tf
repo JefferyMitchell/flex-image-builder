@@ -1,6 +1,6 @@
 # ── Citrix provider ────────────────────────────────────────────────────────────
 variable "citrix_customer_id" { type = string }
-variable "citrix_client_id"   { type = string }
+variable "citrix_client_id" { type = string }
 
 # ── Custom image lookup ────────────────────────────────────────────────────────
 variable "image_name" {
