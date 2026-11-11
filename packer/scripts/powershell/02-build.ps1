@@ -247,54 +247,74 @@ try {
     Remove-Item $template -ErrorAction SilentlyContinue
 }
 
-# Build record: what went into this image, written only after a successful build.
+# Packer succeeded: the image is built. Say so now; the build record below is best-effort.
+$nextStep = "Run 04-export-from-gallery.ps1 to export the OS VHD (+ VMGS) and get the SAS URIs for Terraform."
 $out = @(Get-Content $buildLog) -replace '\x1b\[[0-9;]*m', ''
 $published = $out | Select-String 'SharedImageGalleryImageVersion: (\S+)' | Select-Object -Last 1
 if (-not $published) {
+    Write-Host "`nBuild complete. $nextStep"
     Write-Warning "Packer didn't report a gallery version, so no build record was written. Log: $buildLog"
     exit 0
 }
 $galleryVersion = $published.Matches[0].Groups[1].Value
+Write-Host "`nBuild complete: gallery version $galleryVersion. $nextStep"
+Write-Host "Writing the build record (best-effort: a failure here doesn't affect the image)..."
+
+# Build record: what went into this image, written only after a successful build.
 function Get-Field([string]$Line, [string]$Name) {
     if ($Line -match "\b$Name=(`"[^`"]*`"|\S+)") { $Matches[1].Trim('"') }
 }
 $vdaLine = "$($out | Where-Object { $_ -match 'build-input: vda=' } | Select-Object -Last 1)"
 $optLine = "$($out | Where-Object { $_ -match 'build-input: optimizer=' } | Select-Object -Last 1)"
 $vmLine  = "$($out | Where-Object { $_ -match 'build-vm: ' } | Select-Object -Last 1)"
-$record = [ordered]@{
-    schema       = 1
-    built_utc    = (Get-Date).ToUniversalTime().ToString("o")
-    template     = $Os
-    network      = $(if ($privateNetwork) { "private" } else { "public" })
-    gallery      = [ordered]@{ resource_group = $vars.image_resource_group; name = $vars.gallery_name; image = $vars.gallery_image_name; version = $galleryVersion }
-    base_image   = [ordered]@{ urn = $baseImage; version = $baseVersion }
-    installers   = [ordered]@{
-        vda       = [ordered]@{ file = (Get-Field $vdaLine 'vda'); sha256 = (Get-Field $vdaLine 'sha256'); thumbprint = (Get-Field $vdaLine 'thumbprint'); signer = $(if ($vdaLine -match 'signer=(.+)$') { $Matches[1].Trim() }) }
-        optimizer = [ordered]@{ file = (Get-Field $optLine 'optimizer'); sha256 = (Get-Field $optLine 'sha256'); template = (Get-Field $optLine 'template') }
+try {
+    $record = [ordered]@{
+        schema       = 1
+        built_utc    = (Get-Date).ToUniversalTime().ToString("o")
+        template     = $Os
+        network      = $(if ($privateNetwork) { "private" } else { "public" })
+        gallery      = [ordered]@{ resource_group = $vars.image_resource_group; name = $vars.gallery_name; image = $vars.gallery_image_name; version = $galleryVersion }
+        base_image   = [ordered]@{ urn = $baseImage; version = $baseVersion }
+        installers   = [ordered]@{
+            vda       = [ordered]@{ file = (Get-Field $vdaLine 'vda'); sha256 = (Get-Field $vdaLine 'sha256'); thumbprint = (Get-Field $vdaLine 'thumbprint'); signer = $(if ($vdaLine -match 'signer=(.+)$') { $Matches[1].Trim() }) }
+            optimizer = [ordered]@{ file = (Get-Field $optLine 'optimizer'); sha256 = (Get-Field $optLine 'sha256'); template = (Get-Field $optLine 'template') }
+        }
+        build_vm     = [ordered]@{ os = (Get-Field $vmLine 'os'); build = (Get-Field $vmLine 'build'); secure_boot = (Get-Field $vmLine 'secureboot'); tpm = (Get-Field $vmLine 'tpm') }
+        windows_update = [ordered]@{
+            enabled   = (-not $SkipWindowsUpdate)
+            excluded  = @('Preview', 'KB5007651') + $WindowsUpdateExclude
+            installed = @($out | Where-Object { $_ -match 'Found Windows update' } | ForEach-Object { [regex]::Matches($_, 'KB\d+') | ForEach-Object Value } | Sort-Object -Unique)
+        }
+        apps         = @($out | ForEach-Object { if ($_ -match 'installed-app: ([^|\s]+)\|(\S+)') { [ordered]@{ id = $Matches[1]; version = $Matches[2] } } })
+        downloads    = @($out | ForEach-Object { if ($_ -match 'download: (.+)$') { $Matches[1].Trim() } })
+        tools        = [ordered]@{ packer = "$(packer version | Select-Object -First 1)".Trim(); plugins = $plugins; citrix_packer_tools = $packerToolsCommit; scripts = $VdaVersion }
     }
-    build_vm     = [ordered]@{ os = (Get-Field $vmLine 'os'); build = (Get-Field $vmLine 'build'); secure_boot = (Get-Field $vmLine 'secureboot'); tpm = (Get-Field $vmLine 'tpm') }
-    windows_update = [ordered]@{
-        enabled   = (-not $SkipWindowsUpdate)
-        excluded  = @('Preview', 'KB5007651') + $WindowsUpdateExclude
-        installed = @($out | Where-Object { $_ -match 'Found Windows update' } | ForEach-Object { [regex]::Matches($_, 'KB\d+') | ForEach-Object Value } | Sort-Object -Unique)
-    }
-    apps         = @($out | ForEach-Object { if ($_ -match 'installed-app: ([^|\s]+)\|(\S+)') { [ordered]@{ id = $Matches[1]; version = $Matches[2] } } })
-    downloads    = @($out | ForEach-Object { if ($_ -match 'download: (.+)$') { $Matches[1].Trim() } })
-    tools        = [ordered]@{ packer = "$(packer version | Select-Object -First 1)".Trim(); plugins = $plugins; citrix_packer_tools = $packerToolsCommit; scripts = $VdaVersion }
+    $recordName = "$($vars.gallery_image_name)-$galleryVersion.json"
+    $recordPath = Join-Path $recordDir $recordName
+    $record | ConvertTo-Json -Depth 8 | Set-Content -Path $recordPath
+    Write-Host "Build record (local): $recordPath"
+} catch {
+    Write-Warning "Couldn't write the build record: $($_.Exception.Message). The image is built; the build log is $buildLog"
+    exit 0
 }
-$recordName = "$($vars.gallery_image_name)-$galleryVersion.json"
-$recordPath = Join-Path $recordDir $recordName
-$record | ConvertTo-Json -Depth 8 | Set-Content -Path $recordPath
-Write-Host "`nBuild record: $recordPath"
 
 # Keep a copy next to the installers, and the key fields on the gallery version itself.
+# Each step reports on its own and never stops the script: the image is already built.
 $storageAccount = ([uri]$vars.vda_blob_url).Host.Split('.')[0]
-az storage container create --auth-mode login --account-name $storageAccount --name build-records --only-show-errors -o none 2>$null
-az storage blob upload --auth-mode login --account-name $storageAccount --container-name build-records --file $recordPath --name $recordName --overwrite --only-show-errors -o none
-if ($LASTEXITCODE -ne 0) { Write-Warning "Couldn't upload the build record to $storageAccount/build-records (needs Storage Blob Data Contributor). The local copy stands." }
-az sig image-version update --resource-group $vars.image_resource_group --gallery-name $vars.gallery_name --gallery-image-definition $vars.gallery_image_name --gallery-image-version $galleryVersion `
-    --set "tags.vda=$($record.installers.vda.file)" "tags.vdaSha256=$($record.installers.vda.sha256)" "tags.baseImage=$baseVersion" "tags.packerTools=$($packerToolsCommit.Substring(0, 12))" "tags.buildRecord=build-records/$recordName" `
-    --only-show-errors -o none
-if ($LASTEXITCODE -ne 0) { Write-Warning "Couldn't tag gallery version $galleryVersion with the build record's key fields." }
-
-Write-Host "`nBuild complete. Run 04-export-from-gallery.ps1 to export the OS VHD (+ VMGS) and get the SAS URIs for Terraform."
+try {
+    az storage container create --auth-mode login --account-name $storageAccount --name build-records --only-show-errors -o none 2>$null
+    az storage blob upload --auth-mode login --account-name $storageAccount --container-name build-records --file $recordPath --name $recordName --overwrite --only-show-errors -o none
+    if ($LASTEXITCODE -ne 0) { throw "az storage blob upload exited with $LASTEXITCODE" }
+    Write-Host "Build record (storage): $storageAccount/build-records/$recordName"
+} catch {
+    Write-Warning "Couldn't upload the build record to $storageAccount/build-records (needs Storage Blob Data Contributor): $($_.Exception.Message). The local copy stands."
+}
+try {
+    az sig image-version update --resource-group $vars.image_resource_group --gallery-name $vars.gallery_name --gallery-image-definition $vars.gallery_image_name --gallery-image-version $galleryVersion `
+        --set "tags.vda=$($record.installers.vda.file)" "tags.vdaSha256=$($record.installers.vda.sha256)" "tags.baseImage=$baseVersion" "tags.packerTools=$($packerToolsCommit.Substring(0, 12))" "tags.buildRecord=build-records/$recordName" `
+        --only-show-errors -o none
+    if ($LASTEXITCODE -ne 0) { throw "az sig image-version update exited with $LASTEXITCODE" }
+    Write-Host "Gallery version $galleryVersion tagged with the build record's key fields."
+} catch {
+    Write-Warning "Couldn't tag gallery version $galleryVersion with the build record's key fields: $($_.Exception.Message)"
+}
