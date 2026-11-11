@@ -45,6 +45,7 @@ param(
     [Parameter(ParameterSetName = "Import")] [ValidateSet("Windows", "Linux")] [string]$OsPlatform = "Windows",
 
     [Parameter(ParameterSetName = "Import")] [string]$Notes = "Imported by flex-image-builder 06-import-to-citrix.ps1",
+    [Parameter(ParameterSetName = "Import")] [string]$SubscriptionName = "Citrix Managed",
 
     # Skip the import and check an existing image: wait for Ready, then read back its flags.
     [Parameter(Mandatory, ParameterSetName = "Check")] [string]$ImageId,
@@ -123,7 +124,13 @@ if ($PSCmdlet.ParameterSetName -eq "Import") {
 
     # Field names are the API's, not Terraform's: hyperVGen (machine_generation),
     # vhdEncryptionUri (guest_disk_uri). Unknown names are dropped without an error.
+    # Like the Terraform provider: without azureSubscriptionId the API refuses the import with
+    # "this account does not have Citrix managed capacity enabled" (HTTP 422).
+    $subs = @((Invoke-CitrixApi GET "subscriptions").subscriptions)
+    $sub = $subs | Where-Object { $_.name -eq $SubscriptionName } | Select-Object -First 1
+    if (-not $sub) { Write-Error "No Flex subscription named '$SubscriptionName'. Found: $(($subs | ForEach-Object name) -join ', ')" }
     $body = [ordered]@{
+        azureSubscriptionId = $sub.subscriptionId
         name              = $Name
         vhdUri            = $VhdUri
         osPlatform        = $OsPlatform
