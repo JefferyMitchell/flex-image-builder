@@ -376,6 +376,23 @@ Leave the three `virtual_network_*` keys empty unless your subscription forbids 
 
 The filled-in file is git-ignored, but never commit it anyway: in `ServicePrincipal` mode it holds the client secret.
 
+#### OS version: `image_sku`
+
+`image_sku` in the vars file picks the marketplace image a build starts from. Without it, each template uses its default: `2025-datacenter-g2` for `win_server_2025_dc`, `win11-23h2-ent` for `win_desktop_11_23h2`. The `win_desktop_11_23h2` template builds any Windows 11 Enterprise release; despite its name, the SKU decides which. For Windows 11 26H2, start from [`win11_26h2.json.example`](../packer/variables/win11_26h2.json.example):
+
+```json
+"image_sku":          "win11-26h2-ent",
+"gallery_image_name": "WinDesktop11Enterprise26H2"
+```
+
+Give each Windows release its own gallery image definition, so versions of different releases don't mix. To see what a region offers:
+
+```bash
+az vm image list-skus -l <region> -p MicrosoftWindowsDesktop -f windows-11 --query "[].name" -o tsv
+```
+
+`win11-*-ent` is single-session; `win11-*-avd` is Enterprise multi-session.
+
 #### Gen2 SKU selection
 
 For Windows Server 2025, the marketplace SKU must end in `-g2`:
@@ -922,7 +939,7 @@ The gallery image must have been published with `security_type = TrustedLaunch` 
 
 | Template name | OS | Catalog type | Notes |
 |---------------|----|-------------|-------|
-| `win_desktop_11_23h2` | Windows 11 23H2 | SingleSession or MultiSession (EVD) | |
+| `win_desktop_11_23h2` | Windows 11 (23H2 by default; another release with `image_sku`) | SingleSession or MultiSession (EVD) | |
 | `win_office_11_23h2`  | Windows 11 23H2 + Office | SingleSession or MultiSession (EVD) | |
 | `win_server_2019_dc`  | Windows Server 2019 | MultiSession only | |
 | `win_server_2022_dc`  | Windows Server 2022 | MultiSession only | |
