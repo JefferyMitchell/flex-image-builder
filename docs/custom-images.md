@@ -385,7 +385,16 @@ The filled-in file is git-ignored, but never commit it anyway: in `ServicePrinci
 "gallery_image_name": "WinDesktop11Enterprise26H2"
 ```
 
-Give each Windows release its own gallery image definition, so versions of different releases don't mix. To see what a region offers:
+Give each Windows release its own gallery image definition, so versions of different releases don't mix. `00-setup-azure.ps1` creates `WinDesktop11Enterprise26H2` alongside the others. A gallery set up before that needs it added once, with the same settings:
+
+```bash
+az sig image-definition create --resource-group <build-rg> --gallery-name FlexPackerGallery \
+  --gallery-image-definition WinDesktop11Enterprise26H2 \
+  --publisher FlexImageBuilder --offer FlexImages --sku WinDesktop11Enterprise26H2 \
+  --os-type Windows --os-state Specialized --hyper-v-generation V2 --features SecurityType=TrustedLaunch
+```
+
+To see what a region offers:
 
 ```bash
 az vm image list-skus -l <region> -p MicrosoftWindowsDesktop -f windows-11 --query "[].name" -o tsv

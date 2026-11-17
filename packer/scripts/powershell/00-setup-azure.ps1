@@ -119,7 +119,7 @@ az role assignment create `
 # Citrix MCS needs the pre-generalization disk.
 Write-Host "`nCreating Azure Compute Gallery: $GalleryName..."
 az sig create --resource-group $rg --gallery-name $GalleryName --location $Location | Out-Null
-foreach ($def in @("WinServer2025DC", "WinDesktop11Enterprise23H2")) {
+foreach ($def in @("WinServer2025DC", "WinDesktop11Enterprise23H2", "WinDesktop11Enterprise26H2")) {
     Write-Host "Creating image definition: $def (Gen2, Trusted Launch, Specialized)..."
     az sig image-definition create `
         --resource-group $rg `
