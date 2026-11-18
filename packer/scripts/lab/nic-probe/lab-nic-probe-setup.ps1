@@ -10,9 +10,11 @@
 #         \\<dc>\NicProbe$\<COMPUTER>-adapters.txt (plain Get-NetAdapter, as a fallback)
 # To see results for a machine already running, reboot it (Studio, or POST cvad/manage/Machines/{id}/$reboot).
 #
-# Lab only. Remove with -Remove when you're done.
+# LAB ONLY. Never link it to an OU with production machines: it runs a startup script with
+# -ExecutionPolicy Bypass on every computer in the OU, and gives Domain Computers write access to a
+# share on the domain controller. Remove it with -Remove when you're done.
 param(
-    [Parameter(Mandatory)] [string]$VdaOu,                 # e.g. OU=MCS,OU=VDAs,DC=citrix,DC=lab
+    [Parameter(Mandatory)] [string]$VdaOu,                 # e.g. OU=VDAs,DC=corp,DC=example
     [string]$ProbeScript = (Join-Path $PSScriptRoot "nicprobe.ps1"),
     [string]$ShareDir = "C:\NicProbe",
     [string]$GpoName = "LAB - NIC probe (accelnet validation)",
@@ -38,7 +40,7 @@ if (-not (Get-SmbShare -Name 'NicProbe$' -ErrorAction SilentlyContinue)) {
 icacls $ShareDir /grant "$((Get-ADDomain).NetBIOSName)\Domain Computers:(OI)(CI)M" | Out-Null
 
 # The probe writes to this DC's share.
-(Get-Content $ProbeScript -Raw) -replace '\\\\AD1\.citrix\.lab\\NicProbe\$', "\\$dc\NicProbe$" |
+(Get-Content $ProbeScript -Raw).Replace('__PROBE_SHARE__', "\\$dc\NicProbe$") |
     Set-Content "\\$domain\NETLOGON\nicprobe.ps1" -Encoding UTF8
 
 $gpo = Get-GPO -Name $GpoName -ErrorAction SilentlyContinue

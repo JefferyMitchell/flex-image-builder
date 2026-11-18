@@ -659,6 +659,8 @@ Three scripts take an image through Citrix with the Quick Deploy API instead of 
 | `07-update-catalog-image.ps1` (test script) | Pre-checks, the image update, then a read-back that catches a silent revert | The catalog's image; machines restart onto it |
 | `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
 
+`10-create-catalog.ps1` (test script) creates a catalog with accelerated networking on, which Terraform can't do yet. Use it only for that, then import the catalog into Terraform: see [Accelerated Networking](accelerated-networking.md).
+
 `07` and `08` take `-CatalogName` or `-CatalogId`. All three are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
 
 ### Credentials and site ID

@@ -165,6 +165,9 @@ These are in `packer/scripts/lab/`.
 | `lab-01-check-prereqs.ps1` | Checks tools, the subscription, your roles, vCPU quota, public IP policy, Citrix variables and API access, and the network connection | Nothing |
 | `lab-05-collect-results.ps1` | Copies build records and logs to `lab-results/`, with secrets and identifiers removed | A local results folder |
 | `lab-99-teardown.ps1` | Closes the ports you name, then deletes resource groups marked as part of the lab | **Deletes lab resources** |
+| `nic-probe/lab-nic-probe-setup.ps1` | Run on a domain controller. Links a startup-script GPO to the VDA OU, so each VDA writes its network adapters to a share on the DC at boot. Checks [accelerated networking](accelerated-networking.md#checking-it-in-the-guest). `-Remove` takes it out | **A GPO, a share on the DC and a NETLOGON script.** Never link it to an OU with production machines |
+
+To test a catalog with accelerated networking on, create it with `10-create-catalog.ps1` (**test script**), as [Accelerated Networking](accelerated-networking.md) describes.
 
 ## Using a shared subscription
 

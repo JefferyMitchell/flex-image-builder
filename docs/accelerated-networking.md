@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Accelerated Networking
-nav_order: 9
+nav_order: 10
 ---
 
 # Accelerated Networking
@@ -22,9 +22,11 @@ Every Platform Flex catalog should have Azure accelerated networking on. It's a 
 
 | How the catalog is created | Accelerated networking | Fix |
 |---|---|---|
-| Terraform, `citrix/citrix` provider up to v1.0.41 | **Off**: the provider has no attribute for it and never sends it | Provider attribute (proposed). Until it ships, create with `10-create-catalog.ps1` |
+| Terraform, `citrix/citrix` provider through v1.0.43-tech-preview | **Off**: the provider has no attribute for it and never sends it | Coming: a provider attribute ([Terraform](#terraform-coming)). Until it ships, create with `10-create-catalog.ps1`, then import the catalog into Terraform |
 | Catalog Service API, `POST catalogs/$manageddeploy`, without the field | **Off** | Add `addCatalog.enableAcceleratedNetworking: true` |
-| `10-create-catalog.ps1` (this repo) | **On**, checked after create | — |
+| `10-create-catalog.ps1` (this repo, **test script**) | **On**, checked after create | — |
+
+Terraform is still how this repo creates and manages catalogs. `10-create-catalog.ps1` is a stopgap until the provider can set the flag.
 
 The image pipeline (Packer, gallery export, `06-import-to-citrix.ps1`) needs **no change**: the setting isn't part of the image, and the Windows 11 and Server 2025 images built here already have the driver.
 
@@ -41,7 +43,7 @@ Lab: westus3, Citrix-managed capacity, VNet peering, domain-joined, all machines
 | T1a baseline | Terraform v1.0.41 | Windows 11 26H2, Packer | `false` | Hyper-V adapter only |
 | T1b baseline | Citrix (lab automation) | Server 2025, Citrix-prepared | `false` | Hyper-V adapter only |
 | T2 | API, `10-create-catalog.ps1` | Server 2025, Packer | `true` | **Mellanox ConnectX-4 Lx Virtual Ethernet Adapter**, Up |
-| T3 | Terraform, provider built with the proposed attribute | Windows 11 26H2, Packer | `true` | **Mellanox ConnectX-4 Lx Virtual Ethernet Adapter**, Up |
+| T3 | Terraform, a provider build with the coming attribute | Windows 11 26H2, Packer | `true` | **Mellanox ConnectX-4 Lx Virtual Ethernet Adapter**, Up |
 
 T1a and T3 differ only in the flag: same Windows 11 image, same size, same network. T1b and T2 show the same for Server 2025.
 
@@ -49,13 +51,15 @@ T1a and T3 differ only in the flag: same Windows 11 image, same size, same netwo
 
 ## Creating a catalog with it on
 
-### API (works today)
+### API (works today, test script)
+
+`10-create-catalog.ps1` is a **test script**: not yet validated for production. Use it on a test catalog.
 
 ```powershell
 $env:TF_VAR_domain_service_account_password = "<join account password>"
 .\packer\scripts\powershell\10-create-catalog.ps1 `
     -Name "Task Worker" -ImageName "<image>" -SessionType MultiSession `
-    -VmSize Standard_D2as_v5 -NumberOfUsers 2 `
+    -Region <azure-region> -VmSize Standard_D2as_v5 -NumberOfUsers 2 `
     -VnetPeeringName "<network connection>" `
     -Domain corp.example -DomainOu "OU=VDAs,DC=corp,DC=example" -ServiceAccount svc-join
 ```
@@ -70,9 +74,24 @@ Things the published API reference doesn't tell you, found while writing it:
 - `computeWorker.instanceTypeId` takes the short SKU (`d2asv5`), not the Azure size name (`Standard_D2as_v5`). The size name fails with *"InstanceTypeId is not a valid Azure Instance Id"*.
 - A request with only `scaleSettings: { maxInstances, minInstances }` is accepted, then the deployment fails later with *"Object validation failed"*. Send the full scale settings (peak hours, time zone, weekdays, disconnect actions), `minUniqueUsers`, and `sessionTimeout`, as the Terraform provider does.
 
-### Terraform
+### Bring the catalog under Terraform
 
-`citrix_quickdeploy_catalog` has no attribute for it (up to v1.0.41), so Terraform-built catalogs are always off. An attribute has been proposed to the provider (`enable_accelerated_networking`: optional, set at creation, read back into state). Once a release has it, the catalog modules can pass it through; a released provider without it rejects the argument outright (*"An argument named "enable_accelerated_networking" is not expected here"*), even when the value is `null`, so the module change has to wait for that release. Until then, create catalogs that need it with `10-create-catalog.ps1`.
+A catalog created by `10-create-catalog.ps1` isn't in Terraform's state. To manage it with Terraform from then on:
+
+1. Write its configuration with one of the [examples](https://github.com/JefferyMitchell/flex-image-builder/tree/main/infra/examples), using the same name, region, size, image, network connection and domain settings you passed to the script.
+2. Import it with the catalog ID the script printed:
+
+   ```bash
+   terraform import module.catalog.citrix_quickdeploy_catalog.this <catalog-id>
+   ```
+
+3. Run `terraform plan` and check it shows no changes. If it plans to replace the catalog, fix the configuration first: a replacement deletes the catalog and creates a new one with accelerated networking off.
+
+### Terraform (coming)
+
+`citrix_quickdeploy_catalog` has no attribute for it through v1.0.43-tech-preview, so Terraform-built catalogs are always off. An `enable_accelerated_networking` attribute is a coming feature: optional, set at creation, and read back into state. When a provider release has it, the catalog modules will pass it through. Until then the modules can't add it: a provider without the attribute rejects the argument outright (*"An argument named "enable_accelerated_networking" is not expected here"*), even when the value is `null`.
+
+When it arrives, run `terraform plan` before you apply to a catalog you imported earlier. A setting that can only be chosen at creation can show up as a replacement.
 
 ---
 
@@ -88,12 +107,14 @@ On: a second adapter, **Mellanox ConnectX-… Virtual Ethernet Adapter** (or **M
 
 Citrix-managed VDAs don't accept WinRM, RDP or SMB from the peered VNet, so the lab uses an outbound check: `packer/scripts/lab/nic-probe/lab-nic-probe-setup.ps1` links a startup-script GPO to the VDA OU, and each VDA writes its adapters to a share on the domain controller at boot. New catalog machines report without anyone signing in.
 
+> **Lab only.** Never link the probe to an OU with production machines. It runs a startup script with `-ExecutionPolicy Bypass` on every computer in the OU, and gives Domain Computers write access to a share on the domain controller. Run `lab-nic-probe-setup.ps1 -Remove` when you're done.
+
 **A new single-session machine may be Off.** Right after a catalog deploys, Quick Deploy's smart scale can leave a new single-session machine powered off until the catalog's autoscale settings are changed. A machine that never boots never reports, so power it on before waiting for its probe.
 
 ---
 
 ## Keeping it on
 
-- Create catalogs only through `10-create-catalog.ps1`, or Terraform with the provider attribute.
+- Until the provider attribute ships, create catalogs that need it with `10-create-catalog.ps1`, then import them into Terraform. After that, use Terraform with the attribute.
 - Image updates can't turn it off: `$updateImage` doesn't carry the setting.
 - Changing size family can: re-run the guest check. For v6 sizes, the image needs the MANA driver.

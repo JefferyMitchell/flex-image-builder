@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Continue'
-$dest = '\\AD1.citrix.lab\NicProbe$'
+# lab-nic-probe-setup.ps1 copies this script to NETLOGON with the placeholder below replaced by the DC's share.
+$dest = '__PROBE_SHARE__'
+if ($dest -like '*PROBE_SHARE*') { Write-Error "Run lab-nic-probe-setup.ps1: it sets the share this script writes to."; exit 1 }
 Start-Sleep -Seconds 30
 
 $vmSize = 'unknown'

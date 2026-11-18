@@ -1,19 +1,24 @@
 # 10-create-catalog.ps1
+# TEST SCRIPT: not yet validated for production. Use it on a test catalog.
 # Creates a Citrix DaaS Flex (Quick Deploy) catalog through the API (POST catalogs/$manageddeploy)
 # with accelerated networking ON, and fails unless the catalog reads back with it on.
 #
 # Why: accelerated networking is a per-catalog setting that can only be chosen at creation. The field
 # (addCatalog.enableAcceleratedNetworking) is in Citrix's API but not in the published API reference,
-# and the Terraform provider (citrix_quickdeploy_catalog, up to v1.0.41) never sends it, so catalogs
-# built from code come out with it OFF. The API also ignores fields it doesn't know without an error,
+# and the Terraform provider (citrix_quickdeploy_catalog, through v1.0.43-tech-preview) never sends it,
+# so catalogs built from code come out with it OFF. The API also ignores fields it doesn't know without an error,
 # so this script reads the catalog back instead of trusting the 2xx.
 # See docs/accelerated-networking.md.
+#
+# Terraform is still the way this repo creates catalogs. Use this script only for catalogs that need
+# accelerated networking before the provider supports it, then bring the catalog under Terraform with
+# terraform import (the script prints the command).
 #
 # Usage:
 #   $env:CITRIX_CUSTOMER_ID / CITRIX_CLIENT_ID / CITRIX_CLIENT_SECRET as for 06-import-to-citrix.ps1
 #   $env:TF_VAR_domain_service_account_password = "<join account password>"   # domain-joined catalogs only
 #   .\10-create-catalog.ps1 -Name "Task Worker" -ImageName "<image>" -SessionType MultiSession `
-#       -VnetPeeringName "<peering>" -Domain corp.example -DomainOu "OU=VDAs,DC=corp,DC=example" `
+#       -Region <azure-region> -VnetPeeringName "<peering>" -Domain corp.example -DomainOu "OU=VDAs,DC=corp,DC=example" `
 #       -ServiceAccount svc-join -WhatIf          # print the request (password hidden), send nothing
 #   Optional: -NamingScheme "vda-tw-##" (machine names, # = digit), -SessionTimeoutMinutes 1440 (idle timeout; default 15)
 #
@@ -23,7 +28,7 @@ param(
     [Parameter(Mandatory)] [string]$Name,
     [Parameter(Mandatory)] [string]$ImageName,
     [ValidateSet("MultiSession", "SingleSessionStatic", "SingleSessionRandom")] [string]$SessionType = "MultiSession",
-    [string]$Region = "westus3",
+    [Parameter(Mandatory)] [string]$Region,          # Azure region for the catalog, e.g. eastus2
     [string]$SubscriptionName = "Citrix Managed",
     [string]$VmSize = "Standard_D2as_v5",
     [string]$StorageType = "StandardSSD_LRS",
@@ -46,6 +51,7 @@ param(
     [string]$SiteId
 )
 $ErrorActionPreference = "Stop"
+Write-Warning "Test script: not yet validated for production. Use it on a test catalog."
 . (Join-Path $PSScriptRoot "citrix-api.ps1")
 
 Write-Host "`nConnecting to Citrix Cloud..."
@@ -129,3 +135,7 @@ if ([bool]$c.enableAcceleratedNetworking -ne $EnableAcceleratedNetworking) {
 }
 Write-Host "`nCatalog-level setting confirmed. The catalog deploys its machines next (about 45 minutes)."
 Write-Host "The flag is what was asked for, not proof the NIC is accelerated: check in the guest (docs/accelerated-networking.md)."
+Write-Host "`nTo manage this catalog with Terraform, write its configuration (same name, region, size, image and network),"
+Write-Host "then import it and check the plan shows no changes before you apply:"
+Write-Host "  terraform import module.catalog.citrix_quickdeploy_catalog.this $catalogId"
+Write-Host "  terraform plan"
