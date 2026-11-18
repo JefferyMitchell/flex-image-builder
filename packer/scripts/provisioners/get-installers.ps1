@@ -55,6 +55,12 @@ if ($templates -notcontains $env:OPTIMIZER_TEMPLATE) {
 }
 
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+# ProductName in the registry still says "Windows 10 Enterprise" on Windows 11. Win32_OperatingSystem's Caption
+# has the right name; DisplayVersion adds the release (e.g. "Microsoft Windows 11 Enterprise 26H2").
+# No double quotes in it: 02-build.ps1 reads os="..." from this line.
+$osName = "$($cv.ProductName)"
+try { $osName = "$((Get-CimInstance Win32_OperatingSystem).Caption)" } catch { }
+$osName = ("$osName $($cv.DisplayVersion)".Trim()) -replace '"', ''
 $secureBoot = 'unsupported'
 try { $secureBoot = Confirm-SecureBootUEFI } catch { }
 $tpm = 'unknown'
@@ -62,5 +68,5 @@ try { $t = Get-Tpm; $tpm = "$($t.TpmPresent)/$($t.TpmReady)" } catch { }
 # signer goes last: the subject contains spaces, commas and (on Windows) quotes.
 Write-Host "build-input: vda=$(Split-Path $env:VDA_URL -Leaf) sha256=$vdaHash thumbprint=$($sig.SignerCertificate.Thumbprint) signer=$subject"
 Write-Host "build-input: optimizer=$(Split-Path $env:OPTIMIZER_URL -Leaf) sha256=$optHash template=$env:OPTIMIZER_TEMPLATE"
-Write-Host "build-vm: os=`"$($cv.ProductName)`" build=$($cv.CurrentBuildNumber).$($cv.UBR) secureboot=$secureBoot tpm=$tpm"
+Write-Host "build-vm: os=`"$osName`" build=$($cv.CurrentBuildNumber).$($cv.UBR) secureboot=$secureBoot tpm=$tpm"
 Write-Host "Installers verified."
