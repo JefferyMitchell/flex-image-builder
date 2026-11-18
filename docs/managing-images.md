@@ -56,7 +56,7 @@ A gallery version can't be overwritten, so every build is a new version, and the
 
 ## Apps
 
-Apps come from a list file passed with `-AppsFile`: Chocolatey package IDs, one per line. Start from [`packer/apps/example.apps.txt`](../packer/apps/example.apps.txt).
+Apps come from a list file passed with `-AppsFile`: Chocolatey package IDs, one per line. Start from [`packer/apps/example.apps.txt`](https://github.com/JefferyMitchell/flex-image-builder/blob/main/packer/apps/example.apps.txt).
 
 **Change an app:** edit the list and rebuild. Machines don't pick up app changes on their own; the next image carries them.
 

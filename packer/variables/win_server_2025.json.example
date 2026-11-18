@@ -8,6 +8,7 @@
   "gallery_name":           "FlexPackerGallery",
   "gallery_image_name":     "WinServer2025DC",
   "location":               "eastus",
+  "image_sku":              "2025-datacenter-g2",
   "image_version":          "latest",
 
   "managed_identity_id":    "<managed_identity_id, from 00-setup-azure.ps1>",
