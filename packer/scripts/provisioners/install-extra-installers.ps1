@@ -55,19 +55,41 @@ function Get-InstallerVersion([string]$Path) {
 }
 
 $resetScript = @'
-# Reset-MsmqId.ps1 — added by flex-image-builder; runs at every startup as SYSTEM.
+# Reset-MsmqId.ps1 — added by flex-image-builder; runs at startup as SYSTEM.
 # Gives this machine its own MSMQ machine ID (QMId). Machines cloned from one image (MCS, PVS) otherwise
 # share the image's ID, and MSMQ-based agents such as Citrix Session Recording then lose messages.
 # Steps: stop MSMQ (and the services that depend on it), remove the stored QMId, set SysPrep=1 so MSMQ
 # makes a new one, then start MSMQ and the dependent services that were set to start automatically.
+#
+# Once per machine: after a reset it writes this VM's Azure ID (vmId) to Reset-MsmqId.done and skips later
+# starts on the same VM. A pooled machine's disk goes back to the image at restart, which removes the marker,
+# so it resets at every start; a dedicated machine resets once and keeps its ID, so recordings queued before
+# a restart aren't lost. If the VM ID can't be read, it resets anyway.
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $PSScriptRoot 'Reset-MsmqId.log'
+$marker = Join-Path $PSScriptRoot 'Reset-MsmqId.done'
 function Log([string]$m) { Add-Content -Path $log -Value ("{0:yyyy-MM-ddTHH:mm:ssZ} {1}" -f (Get-Date).ToUniversalTime(), $m) }
 function Get-QmId {
     $v = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\MSMQ\Parameters\MachineCache' -Name QMId -ErrorAction SilentlyContinue).QMId
     if ($v) { [guid]::new([byte[]]$v) } else { 'none' }
 }
+function Get-VmId {
+    # The network can come up a little after the task starts: try for about a minute.
+    for ($i = 0; $i -lt 12; $i++) {
+        try {
+            $id = Invoke-RestMethod -Headers @{ Metadata = 'true' } -TimeoutSec 5 -Uri 'http://169.254.169.254/metadata/instance/compute/vmId?api-version=2021-02-01&format=text'
+            if ("$id" -match '^[0-9a-fA-F-]{36}$') { return "$id".ToLowerInvariant() }
+        } catch { }
+        Start-Sleep -Seconds 5
+    }
+    $null
+}
 try {
+    $vmId = Get-VmId
+    if ($vmId -and (Test-Path $marker) -and ((Get-Content $marker -Raw).Trim() -eq $vmId)) {
+        Log "QMId $(Get-QmId) kept: already reset on this VM ($vmId)"
+        exit 0
+    }
     $before = Get-QmId
     $msmq = Get-Service MSMQ
     $restart = @($msmq.DependentServices | Where-Object { $_.Status -eq 'Running' -or $_.StartType -like 'Automatic*' } | ForEach-Object Name)
@@ -76,7 +98,8 @@ try {
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\MSMQ\Parameters' -Name SysPrep -Value 1 -Type DWord
     Start-Service MSMQ
     foreach ($s in $restart) { Start-Service $s }
-    Log "QMId $before -> $(Get-QmId); restarted: $($restart -join ', ')"
+    if ($vmId) { Set-Content -Path $marker -Value $vmId -Encoding ASCII }
+    Log "QMId $before -> $(Get-QmId) on VM $(if ($vmId) { $vmId } else { 'unknown (reset anyway)' }); restarted: $($restart -join ', ')"
 } catch {
     Log "failed: $($_.Exception.Message)"
     exit 1
@@ -149,6 +172,10 @@ foreach ($e in $entries) {
         if (-not (Get-Service MSMQ -ErrorAction SilentlyContinue)) { Fail "Entry $n ($name): msmq_new_id_at_startup is set, but MSMQ isn't installed. Add MSMQ-Server to windows_features." }
         $dir = Join-Path $env:ProgramData 'FlexImageBuilder'
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        # SYSTEM runs this script and writes its log here: only SYSTEM and Administrators may change the folder.
+        # ProgramData's inherited rights would let any signed-in user create files in it.
+        & icacls.exe $dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "Couldn't restrict $dir to SYSTEM and Administrators (icacls exit $LASTEXITCODE)." }
         $script = Join-Path $dir 'Reset-MsmqId.ps1'
         Set-Content -Path $script -Value $resetScript -Encoding UTF8
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`""

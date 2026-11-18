@@ -97,4 +97,4 @@ if ($extras) {
     }
 }
 Write-Host ""
-Write-Host "No expiry — the Packer build VM authenticates via managed identity at runtime."
+Write-Host "No expiry: the Packer build VM authenticates via managed identity at runtime."

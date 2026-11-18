@@ -529,12 +529,15 @@ The file is a JSON list. Start from [`packer/installers/example.installers.json`
 - **Unconfigured installs.** The example installs the Session Recording agent with no server settings: on DaaS Flex, the catalog's Session Recording site supplies them.
 - **The WEM agent comes with the VDA.** The VDA installer (2603 and 2607 so far) installs the Workspace Environment Management agent itself, at the VDA's version. A separate WEM entry at that version fails with exit code 1: its installer log shows `WEMAgentInstalledVersion` already set. Add one only to move to a different WEM version, and check its release notes on upgrading over the VDA's copy. Its settings come from Group Policy (the agent ADMX files ship with WEM) or the WEM service.
 
-**The MSMQ ID on cloned machines.** The Session Recording agent uses Microsoft Message Queuing (MSMQ) by default, so its entry turns on `MSMQ-Server` first, as Citrix's own prerequisite script does. Every machine MCS or PVS makes from the image then starts with the image's MSMQ machine ID (QMId). Citrix documents what follows: recordings go missing and sessions stay "Live" after logoff on pooled machines. Citrix's fix is a startup task that makes a new ID. `"msmq_new_id_at_startup": true` adds one: `\FlexImageBuilder\Reset MSMQ ID at startup` runs `C:\ProgramData\FlexImageBuilder\Reset-MsmqId.ps1` as SYSTEM at every start. The script:
+**The MSMQ ID on cloned machines.** The Session Recording agent uses Microsoft Message Queuing (MSMQ) by default, so its entry turns on `MSMQ-Server` first, as Citrix's own prerequisite script does. Every machine MCS or PVS makes from the image then starts with the image's MSMQ machine ID (QMId). Citrix documents what follows: recordings go missing and sessions stay "Live" after logoff on pooled machines. Citrix's fix is a startup task that makes a new ID. `"msmq_new_id_at_startup": true` adds one: `\FlexImageBuilder\Reset MSMQ ID at startup` runs `C:\ProgramData\FlexImageBuilder\Reset-MsmqId.ps1` as SYSTEM at startup. The script:
 
-1. stops MSMQ and the services that depend on it;
-2. removes the stored QMId and sets `SysPrep=1`, so MSMQ makes a new ID;
-3. starts MSMQ and the dependents again;
-4. logs the old and new IDs to `Reset-MsmqId.log` next to the script.
+1. skips the reset if it already reset this VM: it keeps the Azure VM ID in `Reset-MsmqId.done`;
+2. stops MSMQ and the services that depend on it;
+3. removes the stored QMId and sets `SysPrep=1`, so MSMQ makes a new ID;
+4. starts MSMQ and the dependents again;
+5. logs the old and new IDs to `Reset-MsmqId.log` next to the script.
+
+So the ID changes once per machine. A pooled machine's disk goes back to the image at each restart, which removes the marker, so it gets a new ID at every start. A dedicated machine gets one at its first start and keeps it, so recordings queued before a restart aren't lost. If the VM ID can't be read, the script resets anyway. Only SYSTEM and Administrators can change the `FlexImageBuilder` folder.
 
 Two machines from one image should show different IDs there. The task runs with `-ExecutionPolicy Bypass` for its own script, so the machine's execution policy doesn't change.
 

@@ -134,7 +134,7 @@ Check the vendor's notes for version pairing before moving one part alone. For e
 
 **Roll back:** point the entry at the previous blob and its hash and rebuild, or update the catalog to the previous gallery version (see [Rollback and audit](#rollback-and-audit)).
 
-**MSMQ ID reset:** on pooled machines built with `msmq_new_id_at_startup`, `C:\ProgramData\FlexImageBuilder\Reset-MsmqId.log` shows each start's old and new ID. Two machines showing the same ID means the task didn't run; check `\FlexImageBuilder\Reset MSMQ ID at startup` in Task Scheduler.
+**MSMQ ID reset:** on machines built with `msmq_new_id_at_startup`, `C:\ProgramData\FlexImageBuilder\Reset-MsmqId.log` shows the old and new ID: at every start on pooled machines, and at the first start on dedicated ones (later starts log "kept"). Two machines showing the same ID means the task didn't run; check `\FlexImageBuilder\Reset MSMQ ID at startup` in Task Scheduler.
 
 ---
 
