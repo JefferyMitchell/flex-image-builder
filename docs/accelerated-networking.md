@@ -88,6 +88,8 @@ On: a second adapter, **Mellanox ConnectX-… Virtual Ethernet Adapter** (or **M
 
 Citrix-managed VDAs don't accept WinRM, RDP or SMB from the peered VNet, so the lab uses an outbound check: `packer/scripts/lab/nic-probe/lab-nic-probe-setup.ps1` links a startup-script GPO to the VDA OU, and each VDA writes its adapters to a share on the domain controller at boot. New catalog machines report without anyone signing in.
 
+**A new single-session machine may be Off.** Right after a catalog deploys, Quick Deploy's smart scale can leave a new single-session machine powered off until the catalog's autoscale settings are changed. A machine that never boots never reports, so power it on before waiting for its probe.
+
 ---
 
 ## Keeping it on
