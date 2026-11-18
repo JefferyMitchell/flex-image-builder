@@ -378,7 +378,7 @@ The filled-in file is git-ignored, but never commit it anyway: in `ServicePrinci
 
 #### OS version: `image_sku`
 
-`image_sku` in the vars file picks the marketplace image a build starts from. Without it, each template uses its default: `2025-datacenter-g2` for `win_server_2025_dc`, `win11-23h2-ent` for `win_desktop_11_23h2`. The `win_desktop_11_23h2` template builds any Windows 11 Enterprise release; despite its name, the SKU decides which. For Windows 11 26H2, start from [`win11_26h2.json.example`](../packer/variables/win11_26h2.json.example):
+`image_sku` in the vars file picks the marketplace image a build starts from. Without it, each template uses its default: `2025-datacenter-g2` for `win_server_2025_dc`, `win11-23h2-ent` for `win_desktop_11_23h2`. The `win_desktop_11_23h2` template builds any Windows 11 Enterprise release; despite its name, the SKU decides which. For Windows 11 26H2, start from [`win11_26h2.json.example`](https://github.com/JefferyMitchell/flex-image-builder/blob/main/packer/variables/win11_26h2.json.example):
 
 ```json
 "image_sku":          "win11-26h2-ent",
@@ -487,7 +487,7 @@ Pass an app list to install apps into the image:
 .\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -AppsFile example.apps.txt
 ```
 
-- **The list** is a text file of [Chocolatey](https://community.chocolatey.org/packages) package IDs, one per line. `#` starts a comment, and `id version` pins a version. Start from [`packer/apps/example.apps.txt`](../packer/apps/example.apps.txt); keep one list per image or persona.
+- **The list** is a text file of [Chocolatey](https://community.chocolatey.org/packages) package IDs, one per line. `#` starts a comment, and `id version` pins a version. Start from [`packer/apps/example.apps.txt`](https://github.com/JefferyMitchell/flex-image-builder/blob/main/packer/apps/example.apps.txt); keep one list per image or persona.
 - **When it runs:** after the template's own steps (VDA, Optimizer, browsers) and just before cleanup, followed by a restart, because some installers need one.
 - **Failures stop the build.** Exit codes 0, 1641 and 3010 pass; anything else fails the build and names the package.
 - **What went in:** the build log lists every installed package and version (`installed-app:` lines). Pin versions in the list when you need a build to be repeatable.
