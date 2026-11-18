@@ -1,0 +1,13 @@
+[
+  {
+    "name": "Citrix Session Recording Agent",
+    "blob_url": "https://<storage-account>.blob.core.windows.net/installers/SessionRecordingAgentx64_2609.msi",
+    "sha256": "<SHA-256, from 01-upload-installers.ps1>",
+    "signer": "Citrix Systems, Inc.",
+    "windows_features": [
+      "MSMQ-Server"
+    ],
+    "arguments": "",
+    "msmq_new_id_at_startup": true
+  }
+]

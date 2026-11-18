@@ -49,6 +49,15 @@ param(
     # Optional mirror of the pinned Chocolatey MSI, for builds that can't reach GitHub. Its hash and signature are still checked.
     [string]$ChocoMsiUrl,
 
+    # Optional extra installers (agents such as Session Recording or Workspace Environment Management): a JSON
+    # list. The build VM checks each like the VDA installer (SHA-256 and Authenticode signer) before installing it.
+    # Installed after the apps, just before cleanup. See packer/installers/example.installers.json.
+    [string]$InstallersFile,
+
+    # Optional DNS Name Resolution Policy (NRPT) rules baked into the image, each "namespace=server[;server]".
+    # E.g. Session Recording on DaaS Flex: ".srsinternal.apps.cloud.com=168.63.129.16".
+    [string[]]$NrptRule = @(),
+
     # citrix-packer-tools commit or tag to build with (its VDA, Optimizer and cleanup scripts), instead of
     # whatever is on main the day you build. The default is the commit this repo was last validated with.
     [string]$PackerToolsRef = "2d3a906959c3693ff7edbe51928b446f607eac44"
@@ -126,6 +135,48 @@ if ($AppsFile) {
     Write-Warning "-ChocoSource is ignored without -AppsFile."
 }
 
+# Extra installers (optional). Check the list here, so a typo fails in seconds rather than after an hour of build.
+if ($InstallersFile) {
+    $installersPath = $InstallersFile
+    if (-not (Test-Path $installersPath)) { $installersPath = Join-Path $repoRoot "packer\installers\$InstallersFile" }
+    if (-not (Test-Path $installersPath)) { Write-Error "Installers file not found: $InstallersFile" }
+    $installersPath = (Resolve-Path $installersPath).Path
+    try { $installerEntries = @(Get-Content $installersPath -Raw | ConvertFrom-Json) } catch { Write-Error "Installers file isn't valid JSON: $installersPath ($($_.Exception.Message))" }
+    if (-not $installerEntries) { Write-Error "Installers file has no entries: $installersPath" }
+    $i = 0
+    foreach ($e in $installerEntries) {
+        $i++
+        $label = "Installers file entry $i ($($e.name))"
+        if (-not "$($e.name)") { Write-Error "Installers file entry ${i}: set name." }
+        if ("$($e.blob_url)" -notmatch '^https://[^/]+/.+\.(msi|exe)$') { Write-Error "${label}: blob_url must be an https URL to an .msi or .exe (01-upload-installers.ps1 prints it)." }
+        if ("$($e.sha256)" -notmatch '^[0-9a-fA-F]{64}$') { Write-Error "${label}: set sha256 to the installer's SHA-256. 01-upload-installers.ps1 prints it." }
+        if (-not "$($e.signer)") { Write-Error "${label}: set signer to the organization its signature must come from (e.g. Citrix Systems, Inc.)." }
+        if ($e.msmq_new_id_at_startup -and @($e.windows_features) -notcontains 'MSMQ-Server') {
+            Write-Warning "${label}: msmq_new_id_at_startup is set but MSMQ-Server isn't in windows_features. The build stops unless the image already has MSMQ."
+        }
+    }
+    Write-Host "Extra installers: $($installerEntries.Count) from $installersPath ($(($installerEntries | ForEach-Object name) -join '; '))."
+}
+
+# NRPT rules (optional): "namespace=server[;server]".
+$nrptRules = @()
+foreach ($r in $NrptRule) {
+    if ($r -notmatch '^(\.?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+)=([0-9A-Fa-f:.]+(;[0-9A-Fa-f:.]+)*)$') {
+        Write-Error "-NrptRule '$r' isn't namespace=server[;server] (e.g. .srsinternal.apps.cloud.com=168.63.129.16)."
+    }
+    $namespace = $Matches[1]
+    $servers = @($Matches[3] -split ';')
+    foreach ($ip in $servers) {
+        # TryParse alone accepts legacy short forms such as "168.63.129", so require four octets for IPv4.
+        $parsed = $null
+        $isV4 = $ip -match '^\d{1,3}(\.\d{1,3}){3}$'
+        $isV6 = $ip.Contains(':')
+        if (-not ($isV4 -or $isV6) -or -not [System.Net.IPAddress]::TryParse($ip, [ref]$parsed)) { Write-Error "-NrptRule '$r': '$ip' isn't an IP address." }
+    }
+    $nrptRules += [pscustomobject]@{ Namespace = $namespace; Servers = $servers }
+}
+if ($nrptRules) { Write-Host "NRPT rules: $(($nrptRules | ForEach-Object { "$($_.Namespace) -> $($_.Servers -join ', ')" }) -join '; ')" }
+
 # citrix-packer-tools provides the VDA, Optimizer and cleanup scripts. Pin it to -PackerToolsRef.
 $packerToolsDir = Join-Path $repoRoot "citrix-packer-tools"
 if (-not (Test-Path $packerToolsDir)) {
@@ -196,20 +247,44 @@ if (-not $SkipWindowsUpdate) {
     })
 }
 foreach ($p in $t.provisioners) { $provisioners.Add($p) }
+
+# Optional steps go in just before the template's last step: cleanup, which wipes c:\setup.
+# Order: apps, then extra installers (agents), then NRPT rules.
+$beforeCleanup = [System.Collections.Generic.List[object]]::new()
 if ($AppsFile) {
-    # Apps go in just before the template's last step: cleanup, which wipes c:\setup.
-    if ("$($provisioners[$provisioners.Count - 1].inline)" -notmatch 'script_cleanup') {
-        Write-Error "Unexpected template shape: the last provisioner isn't the cleanup step."
-    }
     $appEnv = @("CHOCO_VERSION=$chocoVersion", "CHOCO_MSI_URL=$ChocoMsiUrl", "CHOCO_MSI_SHA256=$chocoMsiSha256")
     if ($ChocoSource) { $appEnv += "CHOCO_SOURCE=$ChocoSource" }
-    $appSteps = @(
+    $beforeCleanup.AddRange([object[]]@(
         [pscustomobject][ordered]@{ type = "file"; source = $appsFilePath; destination = '{{user `location_setup`}}\apps.txt' }
         [pscustomobject][ordered]@{ type = "powershell"; script = (Join-Path $repoRoot "packer/scripts/provisioners/install-apps.ps1"); environment_vars = $appEnv }
         # Some installers return 3010 (reboot required): finish that before cleanup and capture.
         [pscustomobject][ordered]@{ type = "windows-restart"; restart_timeout = "30m" }
-    )
-    $provisioners.InsertRange($provisioners.Count - 1, [object[]]$appSteps)
+    ))
+}
+if ($InstallersFile) {
+    $beforeCleanup.AddRange([object[]]@(
+        [pscustomobject][ordered]@{ type = "file"; source = $installersPath; destination = '{{user `location_setup`}}\installers.json' }
+        [pscustomobject][ordered]@{ type = "powershell"; script = (Join-Path $repoRoot "packer/scripts/provisioners/install-extra-installers.ps1") }
+        # Windows features (e.g. MSMQ) and agents often need a restart: finish it before cleanup and capture.
+        [pscustomobject][ordered]@{ type = "windows-restart"; restart_timeout = "30m" }
+    ))
+}
+if ($nrptRules) {
+    # Values are validated above (namespace and IP addresses only), so they're safe to inline.
+    $inline = @('$ErrorActionPreference = "Stop"')
+    foreach ($r in $nrptRules) {
+        $servers = ($r.Servers | ForEach-Object { "'$_'" }) -join ','
+        $inline += "Get-DnsClientNrptRule | Where-Object { `$_.Namespace -contains '$($r.Namespace)' } | ForEach-Object { Remove-DnsClientNrptRule -Name `$_.Name -Force }"
+        $inline += "Add-DnsClientNrptRule -Namespace '$($r.Namespace)' -NameServers $servers -Comment 'flex-image-builder' | Out-Null"
+    }
+    $inline += 'Get-DnsClientNrptRule | Where-Object Comment -eq "flex-image-builder" | ForEach-Object { Write-Host "nrpt-rule: $($_.Namespace -join ",")=$($_.NameServers -join ";")" }'
+    $beforeCleanup.Add([pscustomobject][ordered]@{ type = "powershell"; inline = $inline })
+}
+if ($beforeCleanup.Count) {
+    if ("$($provisioners[$provisioners.Count - 1].inline)" -notmatch 'script_cleanup') {
+        Write-Error "Unexpected template shape: the last provisioner isn't the cleanup step."
+    }
+    $provisioners.InsertRange($provisioners.Count - 1, $beforeCleanup.ToArray())
 }
 $t.provisioners = $provisioners.ToArray()
 
@@ -235,6 +310,8 @@ $template = Join-Path ([System.IO.Path]::GetTempPath()) "${Os}_build_$PID.json"
 [System.IO.File]::WriteAllText($template, ($t | ConvertTo-Json -Depth 32))
 $steps = if ($SkipWindowsUpdate) { "Windows Update skipped" } else { "Windows Update first" }
 if ($AppsFile) { $steps += ", apps before cleanup" }
+if ($InstallersFile) { $steps += ", $($installerEntries.Count) extra installer(s) before cleanup" }
+if ($nrptRules) { $steps += ", $($nrptRules.Count) NRPT rule(s)" }
 Write-Host "Rendered template: $($t.provisioners.Count) provisioners ($steps)."
 
 $recordDir = Join-Path $repoRoot "build-records"
@@ -294,6 +371,12 @@ try {
             installed = @($out | Where-Object { $_ -match 'Found Windows update' } | ForEach-Object { [regex]::Matches($_, 'KB\d+') | ForEach-Object Value } | Sort-Object -Unique)
         }
         apps         = @($out | ForEach-Object { if ($_ -match 'installed-app: ([^|\s]+)\|(\S+)') { [ordered]@{ id = $Matches[1]; version = $Matches[2] } } })
+        extra_installers = @($out | ForEach-Object {
+            if ($_ -match 'build-input: extra=(.+?) sha256=(\S+) thumbprint=(\S+) version=(\S+) signer=(.+)$') {
+                [ordered]@{ file = $Matches[1]; sha256 = $Matches[2]; version = $Matches[4]; thumbprint = $Matches[3]; signer = $Matches[5].Trim() }
+            } })
+        msmq_id_reset = [bool]($out | Where-Object { $_ -match 'msmq-id-reset: ' })
+        nrpt_rules   = @($out | ForEach-Object { if ($_ -match 'nrpt-rule: (\S+)') { $Matches[1] } })
         downloads    = @($out | ForEach-Object { if ($_ -match 'download: (.+)$') { $Matches[1].Trim() } })
         tools        = [ordered]@{ packer = "$(packer version | Select-Object -First 1)".Trim(); plugins = $plugins; citrix_packer_tools = $packerToolsCommit; scripts = $VdaVersion }
     }

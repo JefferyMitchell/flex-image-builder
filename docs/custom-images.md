@@ -350,6 +350,13 @@ The installers keep their file names in storage (`VDAServerSetup_2507.exe`), so 
 
 It also lists the Optimizer templates in your zip, for `optimizer_template`.
 
+Agents and other extra installers (see [Extra installers](#extra-installers-agents-optional) under Step 4) upload the same way with `-ExtraPaths`. Give each a versioned name without spaces first, e.g. `SessionRecordingAgentx64_2609.msi`. The script prints an installers-file entry for each, with its blob URL and SHA-256. `-VdaPath`, `-OptimizerPath` and `-ExtraPaths` are each optional, so a new agent version can go up on its own:
+
+```powershell
+.\packer\scripts\powershell\01-upload-installers.ps1 -StorageAccount flexpackerbuild `
+    -ExtraPaths C:\Downloads\SessionRecordingAgentx64_2609.msi
+```
+
 > **Note:** `--auth-mode login` uploads need a data-plane role on the storage account for the signed-in user (Storage Blob Data Contributor). Owner or Contributor alone is not enough.
 
 ---
@@ -495,6 +502,57 @@ Pass an app list to install apps into the image:
 - **Internal feed:** `-ChocoSource <url>` installs the packages from your own feed and disables the community source.
 - **Why not winget:** its community source fails to initialize in Packer's unattended WinRM session (`0x8a15000f`, "Data required by the source is missing"), even after bootstrapping App Installer.
 
+#### Extra installers: agents (optional)
+
+For installers that aren't Chocolatey packages and need the same checks as the VDA, such as the Citrix Session Recording agent, pass an installers file:
+
+```powershell
+.\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -InstallersFile .\my.installers.json
+```
+
+The file is a JSON list. Start from [`packer/installers/example.installers.json`](../packer/installers/example.installers.json):
+
+| Field | Required | What it does |
+|---|---|---|
+| `name` | yes | Shown in the log and the build record |
+| `blob_url` | yes | The installer in your storage account, `.msi` or `.exe` (`01-upload-installers.ps1 -ExtraPaths` prints it) |
+| `sha256` | yes | The build VM refuses a download that doesn't match |
+| `signer` | yes | The organization its Authenticode signature must come from, e.g. `Citrix Systems, Inc.` |
+| `windows_features` | no | Windows features to turn on first, e.g. `["MSMQ-Server"]`. Server uses `Install-WindowsFeature`; Windows 11 uses `Enable-WindowsOptionalFeature -All` |
+| `arguments` | no | `.msi`: MSI properties, added to `msiexec /i … /qn /norestart /l*v <log>`. `.exe`: the full silent command line, including its quiet switch (e.g. `/quiet`) |
+| `msmq_new_id_at_startup` | no | Adds a startup task that gives each machine its own MSMQ ID (below) |
+
+- **Checked first, like the VDA.** Each installer is downloaded with the build VM's managed identity, then its SHA-256 and its signature (`Valid`, from `signer`) are checked before anything runs. Any failure stops the build. `02-build.ps1` checks the file's shape before it starts, so a missing hash fails in seconds, not after an hour.
+- **When it runs:** after the apps (if any), just before cleanup, followed by a restart. The Optimizer has already run, so it doesn't touch the agents' services.
+- **Exit codes** 0, 1641 and 3010 pass. On a failed MSI, the build log shows the last lines of its verbose log.
+- **What went in:** `installed-extra:` lines in the build log, and `extra_installers` in the build record (file, SHA-256, version, signer, thumbprint).
+- **Unconfigured installs.** The example installs the Session Recording agent with no server settings: on DaaS Flex, the catalog's Session Recording site supplies them.
+- **The WEM agent comes with the VDA.** The VDA installer (2603 and 2607 so far) installs the Workspace Environment Management agent itself, at the VDA's version. A separate WEM entry at that version fails with exit code 1: its installer log shows `WEMAgentInstalledVersion` already set. Add one only to move to a different WEM version, and check its release notes on upgrading over the VDA's copy. Its settings come from Group Policy (the agent ADMX files ship with WEM) or the WEM service.
+
+**The MSMQ ID on cloned machines.** The Session Recording agent uses Microsoft Message Queuing (MSMQ) by default, so its entry turns on `MSMQ-Server` first, as Citrix's own prerequisite script does. Every machine MCS or PVS makes from the image then starts with the image's MSMQ machine ID (QMId). Citrix documents what follows: recordings go missing and sessions stay "Live" after logoff on pooled machines. Citrix's fix is a startup task that makes a new ID. `"msmq_new_id_at_startup": true` adds one: `\FlexImageBuilder\Reset MSMQ ID at startup` runs `C:\ProgramData\FlexImageBuilder\Reset-MsmqId.ps1` as SYSTEM at startup. The script:
+
+1. skips the reset if it already reset this VM: it keeps the Azure VM ID in `Reset-MsmqId.done`;
+2. stops MSMQ and the services that depend on it;
+3. removes the stored QMId and sets `SysPrep=1`, so MSMQ makes a new ID;
+4. starts MSMQ and the dependents again;
+5. logs the old and new IDs to `Reset-MsmqId.log` next to the script.
+
+So the ID changes once per machine. A pooled machine's disk goes back to the image at each restart, which removes the marker, so it gets a new ID at every start. A dedicated machine gets one at its first start and keeps it, so recordings queued before a restart aren't lost. If the VM ID can't be read, the script resets anyway. Only SYSTEM and Administrators can change the `FlexImageBuilder` folder.
+
+Two machines from one image should show different IDs there. The task runs with `-ExecutionPolicy Bypass` for its own script, so the machine's execution policy doesn't change.
+
+#### DNS rules (NRPT, optional)
+
+Some services need a namespace resolved by a specific DNS server rather than the machine's normal one (often your domain controllers). Session Recording on DaaS Flex is one: the VDAs must resolve `*.srsinternal.apps.cloud.com` through the Azure DNS address of their own virtual network, `168.63.129.16`. Citrix lists two ways: a Group Policy Name Resolution Policy, or the same rule built into the image. `-NrptRule` does the second:
+
+```powershell
+.\02-build.ps1 ... -NrptRule ".srsinternal.apps.cloud.com=168.63.129.16"
+```
+
+- Format: `namespace=server[;server]`. A leading dot matches every name under the namespace. Give the option once per rule.
+- The rule goes into the image just before cleanup, tagged `flex-image-builder`. A rule already there for the same namespace is replaced. The build log and the build record (`nrpt_rules`) list what went in.
+- Why not a conditional forwarder on your DNS servers: `168.63.129.16` answers for the virtual network the query comes *from*. Forwarded from a domain controller in your own network, the query wouldn't reach the private records that only the VDAs' network can resolve.
+
 At completion Packer outputs the gallery image version it published:
 
 ```
@@ -513,6 +571,7 @@ For patching, app changes, upgrades and rollback over time, see [Managing Images
 - **Hashes:** the VDA installer and the Optimizer zip must match `vda_sha256` and `optimizer_sha256`.
 - **Signature:** the VDA installer's Authenticode signature must be `Valid`, from `O=Citrix Systems, Inc.` (`vda_signer`).
 - **Optimizer template:** `optimizer_template` must exist in the zip.
+- **Extra installers** (with `-InstallersFile`): each one's SHA-256 and signature, the same way, just before it's installed.
 
 Any failure stops the build. It downloads with `curl.exe` and logs each download's time and speed.
 
@@ -530,6 +589,7 @@ Any failure stops the build. It downloads with `curl.exe` and logs each download
 - the exact base image version and the citrix-packer-tools commit;
 - the Windows updates installed and those excluded;
 - the apps with versions;
+- the extra installers (file, hash, version, signer), whether the MSMQ ID reset was added, and the NRPT rules;
 - the OS build, and the build VM's Secure Boot and TPM state;
 - the download times;
 - the Packer and plugin versions.
@@ -541,7 +601,7 @@ It uploads a copy to the `build-records` container of your storage account, and 
 Understanding the build sequence prevents the "wrong VHD" mistake:
 
 1. Deploys a VM from the marketplace image into the build resource group
-2. Installs Windows updates (unless `-SkipWindowsUpdate`), then runs the template's provisioners (VDA install, restart, VDA install phase 2, Ngen, Optimizer, Chrome, cleanup)
+2. Installs Windows updates (unless `-SkipWindowsUpdate`), then runs the template's provisioners (VDA install, restart, VDA install phase 2, Ngen, Optimizer, Chrome), then the optional apps, extra installers and NRPT rules, then cleanup
 3. **Powers off the VM**
 4. **Publishes the OS disk (and its VM guest state) straight into the gallery image version.** With `"specialized": true` Packer skips the Generalize call, so the disk stays non-sysprepped — the state Citrix MCS needs
 5. Deletes the build VM and its temporary resources

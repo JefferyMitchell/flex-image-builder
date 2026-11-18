@@ -25,6 +25,8 @@ Building the first image is a one-off. This page is about everything after it: m
 | **Monthly**, after Patch Tuesday | Rebuild every image | Windows updates, Defender platform and the newest marketplace base |
 | When a **VDA** you've validated ships | Upload it, rebuild, update catalogs | VDA fixes and features |
 | When an **app** changes | Edit its list, rebuild | Apps are baked in; machines don't update them in place |
+| When an **agent** you've validated ships (Session Recording, WEM, …) | Upload it, update the installers file, rebuild | Agents are baked in, like the VDA |
+| When a **Windows release** ships (e.g. 26H2) | New gallery definition, `image_sku`, test build | A new release is a new image line, not a patch |
 | **Quarterly** | Review the pinned inputs | Keep pins current on purpose rather than by accident |
 
 Every rebuild is the same three steps:
@@ -110,6 +112,41 @@ Every build installs all available updates **except**:
 
 The build VM refuses an installer whose SHA-256 doesn't match, or whose signature isn't a valid one from Citrix (`vda_signer`). **Never loosen `vda_signer` to get a build through:** re-download the installer instead.
 
+The `-VdaVersion` you pass to `02-build.ps1` picks a citrix-packer-tools script set, not the VDA. A newer VDA than the newest script set (for example VDA 2607 with `v2507`) builds fine: the installer always comes from `vda_blob_url`.
+
+---
+
+## Agents and other extra installers
+
+Agents such as Session Recording come from an installers file passed with `-InstallersFile` (see [Extra installers](custom-images.md#extra-installers-agents-optional)). Keep one file per image, next to its vars file.
+
+**The WEM agent** isn't one of them: the VDA installer brings it at the VDA's version, so it moves with VDA upgrades.
+
+**Upgrade an agent:**
+1. Give the new installer a versioned name without spaces (`SessionRecordingAgentx64_2609.msi`).
+2. Upload it with `01-upload-installers.ps1 -ExtraPaths <file>`. The old version stays in the container.
+3. Paste its `blob_url` and `sha256` into the installers file, then rebuild.
+4. Check `extra_installers` in the build record for the new version.
+
+Check the vendor's notes for version pairing before moving one part alone. For example, an agent may need a minimum VDA.
+
+**Remove an agent:** delete its entry and rebuild. Windows features it turned on (such as MSMQ) go too, because the next image starts from the marketplace again.
+
+**Roll back:** point the entry at the previous blob and its hash and rebuild, or update the catalog to the previous gallery version (see [Rollback and audit](#rollback-and-audit)).
+
+**MSMQ ID reset:** on machines built with `msmq_new_id_at_startup`, `C:\ProgramData\FlexImageBuilder\Reset-MsmqId.log` shows the old and new ID: at every start on pooled machines, and at the first start on dedicated ones (later starts log "kept"). Two machines showing the same ID means the task didn't run; check `\FlexImageBuilder\Reset MSMQ ID at startup` in Task Scheduler.
+
+---
+
+## Windows release upgrades
+
+A new Windows release (for example Windows 11 23H2 → 26H2) is a new image line:
+
+1. Create a gallery image definition for it; `00-setup-azure.ps1` already makes `WinDesktop11Enterprise26H2`. See [OS version](custom-images.md#os-version-image_sku) for adding one to an existing gallery.
+2. Copy the vars file. Set `image_sku` (e.g. `win11-26h2-ent`) and `gallery_image_name`, and start `gallery_image_version` at `1.0.0`.
+3. Check `optimizer_template`: Optimizer templates are per OS, and a release may need a newer Optimizer.
+4. Test-build. Then try the image on a test catalog before moving a production catalog to it.
+
 ---
 
 ## Optimizer updates
@@ -129,6 +166,7 @@ Builds are repeatable because their inputs are pinned:
 | Chocolatey | `02-build.ps1` | editing the version, after a test build |
 | Marketplace image | resolved per build from `latest` | setting `image_version` to hold one |
 | Apps | your app list | `id version` lines |
+| Extra installers (agents) | your installers file | a new `blob_url` and `sha256` |
 
 **Review them quarterly:** test-build with newer versions, compare the build records, then move the pins. Don't let them drift because something was "latest" on the day.
 
