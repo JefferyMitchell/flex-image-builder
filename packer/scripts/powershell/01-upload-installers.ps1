@@ -30,6 +30,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# "pwsh -File" (macOS, Linux, CI) passes "-ExtraPaths a,b" as one string: split it, unless it's a real file name.
+$ExtraPaths = @($ExtraPaths | ForEach-Object { if ($_ -match ',' -and -not (Test-Path -LiteralPath $_)) { $_ -split ',' } else { $_ } } | Where-Object { $_ })
+
 if (-not $VdaPath -and -not $OptimizerPath -and -not $ExtraPaths) { Write-Error "Nothing to upload: give -VdaPath, -OptimizerPath and/or -ExtraPaths." }
 if ($VdaPath -and -not (Test-Path $VdaPath))             { Write-Error "VDA installer not found: $VdaPath" }
 if ($OptimizerPath -and -not (Test-Path $OptimizerPath)) { Write-Error "Citrix Optimizer not found: $OptimizerPath" }
