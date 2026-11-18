@@ -80,7 +80,8 @@ function Invoke-CitrixRequest {
     param(
         [Parameter(Mandatory)] [string]$Method,
         [Parameter(Mandatory)] [string]$Uri,
-        $Body
+        $Body,
+        [hashtable]$ExtraHeaders = @{}
     )
     $ctx = $script:CitrixApi
     if ($ctx.Expires -lt [DateTime]::UtcNow.AddMinutes(5)) { Update-CitrixToken }
@@ -89,6 +90,7 @@ function Invoke-CitrixRequest {
         "Citrix-CustomerId" = $ctx.CustomerId
         Accept              = "application/json"
     }
+    foreach ($k in $ExtraHeaders.Keys) { $headers[$k] = $ExtraHeaders[$k] }
     $json = if ($null -ne $Body) { $Body | ConvertTo-Json -Depth 10 -Compress } else { $null }
     $resp = Invoke-WebRequest -Method $Method -Uri $Uri -Headers $headers -Body $json `
         -ContentType "application/json" -SkipHttpErrorCheck
@@ -110,6 +112,18 @@ function Invoke-CitrixApi {
         $Body
     )
     Invoke-CitrixRequest -Method $Method -Uri "$($script:CitrixApi.BaseUri)/$Path" -Body $Body
+}
+
+# Call the DaaS (broker) API, which takes the site in a header: Invoke-CitrixBroker GET "MachineCatalogs/$id".
+# It reports what MCS actually builds machines with (the provisioning scheme), not just what was requested.
+function Invoke-CitrixBroker {
+    param(
+        [Parameter(Mandatory)] [string]$Method,
+        [Parameter(Mandatory)] [string]$Path,
+        $Body
+    )
+    $ctx = $script:CitrixApi
+    Invoke-CitrixRequest -Method $Method -Uri "https://$($ctx.ApiHost)/cvad/manage/$Path" -Body $Body -ExtraHeaders @{ "Citrix-InstanceId" = $ctx.SiteId }
 }
 
 function Get-CitrixImage([string]$ImageId) {

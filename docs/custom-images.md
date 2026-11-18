@@ -651,15 +651,16 @@ Terraform will update the template image in place and trigger Citrix to update t
 
 ## Lifecycle with the API
 
-Three scripts take an image through Citrix with the Quick Deploy API instead of Terraform: import it, move a catalog to it, and delete a domain-joined catalog. Use them in a scripted pipeline, to update the image of a catalog that already exists, or to delete a domain-joined catalog that `terraform destroy` can't.
+Four scripts take an image through Citrix with the Quick Deploy API instead of Terraform: import it, check what a deployed catalog builds its machines with, move a catalog to it, and delete a domain-joined catalog. Use them in a scripted pipeline, to update the image of a catalog that already exists, or to delete a domain-joined catalog that `terraform destroy` can't.
 
 | Script | What it does | What it changes |
 |---|---|---|
 | `06-import-to-citrix.ps1` | Imports the exported OS VHD and VMGS, waits for `Ready`, reads back the generation and Trusted Launch flags | Adds an image to the library |
 | `07-update-catalog-image.ps1` (test script) | Pre-checks, the image update, then a read-back that catches a silent revert | The catalog's image; machines restart onto it |
 | `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
+| `11-check-catalog.ps1` | Reads a deployed catalog back from Quick Deploy and the broker: the machine profile's Trusted Launch flags against the image's, accelerated networking, and each machine's state | Nothing (read-only) |
 
-`07` and `08` take `-CatalogName` or `-CatalogId`. All three are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
+`07` and `08` take `-CatalogName` or `-CatalogId`; `11` takes `-CatalogName`. All four are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
 
 ### Credentials and site ID
 
@@ -718,6 +719,26 @@ Trusted Launch (Gen2, vTPM, Secure Boot) is the default. For a Gen2 image withou
 To check an image that's already imported, or to keep waiting after a timeout, run `06-import-to-citrix.ps1 -ImageId <id>`. Add the same `-NoSecureBoot` / `-NoVtpm` you imported with.
 
 > **Use the site-scoped route.** `POST /catalogservice/{customerId}/images`, without the site ID, looks right but is the bring-your-own-subscription route. Its images stay `Pending` forever. See [Troubleshooting](troubleshooting.md#an-imported-image-stays-pending-forever).
+
+### Check a deployed catalog
+
+Quick Deploy reports what a catalog asked for, and it drops fields it doesn't know without an error. What MCS actually builds machines with is in the broker's provisioning scheme (`GET https://api.cloud.com/cvad/manage/MachineCatalogs/{id}`, with the site ID in a `Citrix-InstanceId` header). `11-check-catalog.ps1` reads both, read-only, once the catalog has deployed:
+
+```powershell
+.\packer\scripts\powershell\11-check-catalog.ps1 -CatalogName "Task Worker Desktop"
+```
+
+It prints:
+- **Quick Deploy:** state, size, image and `enableAcceleratedNetworking`.
+- **The image**, from the site's image list: generation, vTPM, Secure Boot and VDA version.
+- **The machine profile** MCS builds from: `SecurityType`, Secure Boot, vTPM, accelerated networking, size, and the naming scheme and OU.
+- **Each machine:** power state, registration, maintenance mode and VDA version.
+
+**It fails (exit 1)** when the machine profile's Secure Boot or vTPM differ from the image's, when the image is Trusted Launch but the profile isn't, or when accelerated networking isn't what `-ExpectAcceleratedNetworking` says. That parameter defaults to `$false`: accelerated networking can only be chosen when a catalog is created, and the Terraform provider (`citrix_quickdeploy_catalog`, up to v1.0.41) doesn't send it, so catalogs built from code have it off. Pass `-ExpectAcceleratedNetworking $true` for a catalog created with it on.
+
+- **Run it after deployment.** Before that, the broker has no catalog or provisioning scheme yet, and the script says so.
+- **The broker returns some flags as the strings `"True"`/`"False"`.** In PowerShell `[bool]"False"` is `$true`, so the script compares them as strings.
+- **The flag isn't proof of an accelerated NIC.** On sizes where Azure requires accelerated networking it's on whatever the flag says. In the guest, `Get-NetAdapter` shows a second adapter, Mellanox or Microsoft Azure Network Adapter, Up, when it's on.
 
 ### Update a catalog's image
 
