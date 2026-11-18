@@ -8,7 +8,9 @@
 #
 # OS options: win_server_2025_dc, win_server_2022_dc, win_server_2019_dc,
 #             win_desktop_11_23h2, win_office_11_23h2
-# VDA version options: v2407, v2411, v2503, v2507
+# VDA version options: v2407, v2411, v2503, v2507 (a citrix-packer-tools script set, not the VDA you install:
+#   that comes from vda_blob_url, so a 2607 installer builds with -VdaVersion v2507)
+# The marketplace SKU comes from image_sku in the vars file (e.g. win11-26h2-ent), else the template's default.
 
 param(
     [Parameter(Mandatory)]
@@ -211,8 +213,14 @@ if ($AppsFile) {
 }
 $t.provisioners = $provisioners.ToArray()
 
-# Base image: resolve "latest" to the exact marketplace version, so the build is repeatable and recorded.
+# Base image: image_sku from the vars file, else the template's default (e.g. win11-26h2-ent instead of
+# win11-23h2-ent). The rendered template gets the literal SKU, so the lookup below and the record use it.
 $b0 = $t.builders[0]
+$sku = "$($vars.image_sku)"
+if (-not $sku) { $sku = "$($t.variables.image_sku)" }
+if (-not $sku) { Write-Error "Set image_sku in the vars file (the marketplace SKU to build from, e.g. 2025-datacenter-g2)." }
+$b0.image_sku = $sku
+# Resolve "latest" to the exact marketplace version, so the build is repeatable and recorded.
 $baseImage = "$($b0.image_publisher):$($b0.image_offer):$($b0.image_sku)"
 $baseVersion = "$($vars.image_version)"
 if (-not $baseVersion -or $baseVersion -eq "latest") {

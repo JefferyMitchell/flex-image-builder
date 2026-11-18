@@ -376,6 +376,32 @@ Leave the three `virtual_network_*` keys empty unless your subscription forbids 
 
 The filled-in file is git-ignored, but never commit it anyway: in `ServicePrincipal` mode it holds the client secret.
 
+#### OS version: `image_sku`
+
+`image_sku` in the vars file picks the marketplace image a build starts from. Without it, each template uses its default: `2025-datacenter-g2` for `win_server_2025_dc`, `win11-23h2-ent` for `win_desktop_11_23h2`. The `win_desktop_11_23h2` template builds any Windows 11 Enterprise release; despite its name, the SKU decides which. For Windows 11 26H2, start from [`win11_26h2.json.example`](https://github.com/JefferyMitchell/flex-image-builder/blob/main/packer/variables/win11_26h2.json.example):
+
+```json
+"image_sku":          "win11-26h2-ent",
+"gallery_image_name": "WinDesktop11Enterprise26H2"
+```
+
+Give each Windows release its own gallery image definition, so versions of different releases don't mix. `00-setup-azure.ps1` creates `WinDesktop11Enterprise26H2` alongside the others. A gallery set up before that needs it added once, with the same settings:
+
+```bash
+az sig image-definition create --resource-group <build-rg> --gallery-name FlexPackerGallery \
+  --gallery-image-definition WinDesktop11Enterprise26H2 \
+  --publisher FlexImageBuilder --offer FlexImages --sku WinDesktop11Enterprise26H2 \
+  --os-type Windows --os-state Specialized --hyper-v-generation V2 --features SecurityType=TrustedLaunch
+```
+
+To see what a region offers:
+
+```bash
+az vm image list-skus -l <region> -p MicrosoftWindowsDesktop -f windows-11 --query "[].name" -o tsv
+```
+
+`win11-*-ent` is single-session; `win11-*-avd` is Enterprise multi-session.
+
 #### Gen2 SKU selection
 
 For Windows Server 2025, the marketplace SKU must end in `-g2`:
@@ -461,7 +487,7 @@ Pass an app list to install apps into the image:
 .\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -AppsFile example.apps.txt
 ```
 
-- **The list** is a text file of [Chocolatey](https://community.chocolatey.org/packages) package IDs, one per line. `#` starts a comment, and `id version` pins a version. Start from [`packer/apps/example.apps.txt`](../packer/apps/example.apps.txt); keep one list per image or persona.
+- **The list** is a text file of [Chocolatey](https://community.chocolatey.org/packages) package IDs, one per line. `#` starts a comment, and `id version` pins a version. Start from [`packer/apps/example.apps.txt`](https://github.com/JefferyMitchell/flex-image-builder/blob/main/packer/apps/example.apps.txt); keep one list per image or persona.
 - **When it runs:** after the template's own steps (VDA, Optimizer, browsers) and just before cleanup, followed by a restart, because some installers need one.
 - **Failures stop the build.** Exit codes 0, 1641 and 3010 pass; anything else fails the build and names the package.
 - **What went in:** the build log lists every installed package and version (`installed-app:` lines). Pin versions in the list when you need a build to be repeatable.
@@ -659,6 +685,8 @@ Four scripts take an image through Citrix with the Quick Deploy API instead of T
 | `07-update-catalog-image.ps1` (test script) | Pre-checks, the image update, then a read-back that catches a silent revert | The catalog's image; machines restart onto it |
 | `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
 | `11-check-catalog.ps1` | Reads a deployed catalog back from Quick Deploy and the broker: the machine profile's Trusted Launch flags against the image's, accelerated networking, and each machine's state | Nothing (read-only) |
+
+`10-create-catalog.ps1` (test script) creates a catalog with accelerated networking on, which Terraform can't do yet. Use it only for that, then import the catalog into Terraform: see [Accelerated Networking](accelerated-networking.md).
 
 `07` and `08` take `-CatalogName` or `-CatalogId`; `11` takes `-CatalogName`. All four are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
 
@@ -943,7 +971,7 @@ The gallery image must have been published with `security_type = TrustedLaunch` 
 
 | Template name | OS | Catalog type | Notes |
 |---------------|----|-------------|-------|
-| `win_desktop_11_23h2` | Windows 11 23H2 | SingleSession or MultiSession (EVD) | |
+| `win_desktop_11_23h2` | Windows 11 (23H2 by default; another release with `image_sku`) | SingleSession or MultiSession (EVD) | |
 | `win_office_11_23h2`  | Windows 11 23H2 + Office | SingleSession or MultiSession (EVD) | |
 | `win_server_2019_dc`  | Windows Server 2019 | MultiSession only | |
 | `win_server_2022_dc`  | Windows Server 2022 | MultiSession only | |

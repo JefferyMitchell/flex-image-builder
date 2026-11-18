@@ -15,7 +15,7 @@
 # (Get-NetAdapter: a Mellanox or Microsoft Azure Network Adapter, Up).
 #
 # Accelerated networking can only be chosen when a catalog is created, and the Terraform provider
-# (citrix_quickdeploy_catalog, up to v1.0.41) never sends it, so catalogs built from code have it off.
+# (citrix_quickdeploy_catalog, through v1.0.43-tech-preview) never sends it, so catalogs built from code have it off.
 # -ExpectAcceleratedNetworking therefore defaults to $false; pass $true for a catalog created with it on.
 #
 # Usage (credentials as for 06-import-to-citrix.ps1):

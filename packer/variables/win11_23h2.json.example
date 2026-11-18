@@ -8,6 +8,7 @@
   "gallery_name":           "FlexPackerGallery",
   "gallery_image_name":     "WinDesktop11Enterprise23H2",
   "location":               "eastus",
+  "image_sku":              "win11-23h2-ent",
   "image_version":          "latest",
 
   "managed_identity_id":    "<managed_identity_id, from 00-setup-azure.ps1>",
