@@ -8,8 +8,13 @@ try {
     $vmSize = $imds.vmSize
 } catch { $vmSize = 'imds-error' }
 
+# Read Secure Boot from the registry: Confirm-SecureBootUEFI fails in a GPO startup script
+# ("Unable to set proper privileges"), so it always reported 'unsupported' here.
 $secureBoot = 'unsupported'
-try { $secureBoot = Confirm-SecureBootUEFI } catch { }
+try {
+    $sbState = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\State' -Name UEFISecureBootEnabled -ErrorAction Stop
+    $secureBoot = [bool]$sbState.UEFISecureBootEnabled
+} catch { }
 
 $adapters = @(Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, LinkSpeed, MacAddress)
 $vf = @(Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match '^PCI\\VEN_1414&DEV_00BA' -or $_.InstanceId -match '^PCI\\VEN_15B3' -or $_.FriendlyName -match 'Mellanox|Azure Network Adapter' } | Select-Object FriendlyName, InstanceId, Status)
