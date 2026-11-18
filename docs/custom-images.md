@@ -102,9 +102,9 @@ The snapshot SAS URL returned by `az snapshot grant-access` uses Azure's interna
 https://<guid>.blob.storage.azure.net/<container>/<blob>
 ```
 
-This is an internal Azure-to-Azure endpoint. The `az storage blob copy start` command uses Azure's server-side copy API, which rejects these internal source URLs with a 403 `AuthenticationFailed` error. The error message gives no hint that the URL format is the problem.
+`az storage blob copy start` uses Azure's server-side copy API. In this repo's testing it failed with a 403 `AuthenticationFailed` error when the source was one of these snapshot SAS URLs, with no hint about why. It doesn't always fail: server-side copies from Gen2 snapshots without Trusted Launch have succeeded elsewhere, and the VHDs imported fine. The cause isn't confirmed; Trusted Launch snapshots and their guest-state SAS, network rules on the destination storage, and cross-region copies are all possible.
 
-AzCopy v10 handles the transfer differently — it downloads and re-uploads via the client — and works correctly with internal snapshot SAS URLs.
+AzCopy v10 has worked in every case, for the OS disk and the VMGS, so the export scripts use it.
 
 **AzCopy must be installed separately** (`winget install Microsoft.Azure.AzCopy.10`). It is not part of the Azure CLI.
 
@@ -188,7 +188,7 @@ vhd-output/
   win_server_2025_dc_202607160709-vmgs.vhd     ← VMGS     → guest_disk_uri
 ```
 
-Both URIs go into `terraform.tfvars`:
+Both URIs go to the import, [`06-import-to-citrix.ps1`](#import-an-image) `-VhdUri` and `-GuestDiskUri`. It imports the image as Gen2 with vTPM and Secure Boot, and reads all three back. To import with Terraform instead, the same values go into a `citrix_quickdeploy_template_image` resource (provider v1.0.39 or later):
 
 ```hcl
 machine_generation   = "V2"
@@ -208,7 +208,9 @@ Confirm-SecureBootUEFI   # returns True when Secure Boot is active
 
 ### Current validation state
 
-The export script and Terraform variables are implemented. The next Packer rebuild (with `security_type = "TrustedLaunch"` now in the template) will be the first end-to-end Trusted Launch validation run. The Gen2-without-Trusted-Launch pipeline has been validated on a test catalog.
+Trusted Launch works end to end. Images built with these templates have been imported with Secure Boot and vTPM, read back, and run in live catalogs.
+
+Through Terraform, `citrix_quickdeploy_template_image` with `guest_disk_uri` works from provider v1.0.39. Earlier versions rejected it at validation, even with `secure_boot_enabled = true` (see [the bug report](bug-report-provider-validate-config.md)). A retest on v1.0.41 imported a Trusted Launch image (`Ready` in 16 minutes, with Gen2, vTPM and Secure Boot read back) and destroyed it in seconds. The examples require v1.0.39 or later.
 
 > **If `03-export-image.ps1` outputs "VMGS SAS not returned"**: the snapshot was built without `security_type = "TrustedLaunch"`. Rebuild with the updated Packer template — it is now the default for `win_server_2025_dc`.
 
@@ -223,6 +225,7 @@ The `citrix/citrix` Terraform provider has had breaking schema changes across mi
 | v1.0.35 | `customer_id`, `client_id`, `client_secret` at provider root |
 | v1.0.36 | Fixes for power schedule schema |
 | **v1.0.37** | Provider credentials moved into `cvad_config = { }` block. `client_secret` removed from Terraform config — must be set via `CITRIX_CLIENT_SECRET` environment variable only. `on_prem_connectivity` and `domain_identity` changed from HCL block syntax to object attribute syntax (`= { }`) |
+| **v1.0.39** | Not breaking. Fixes the validation that rejected `guest_disk_uri` with Secure Boot (Trusted Launch). The minimum the examples require |
 
 ### v1.0.37 provider configuration
 
@@ -643,19 +646,29 @@ The script:
 4. Generates a read SAS on the blob (7-day default)
 5. Outputs the full SAS URI
 
-> **Gotcha — `az storage blob copy start` does not work:** The snapshot SAS URL returned by Azure is in the internal format `https://<guid>.blob.storage.azure.net/...`. Azure's server-side copy API rejects this as a source — you get a 403 `AuthenticationFailed` error with no explanation that the URL format is the problem. AzCopy v10 must be used instead. Install via `winget install Microsoft.Azure.AzCopy.10`.
+> **Gotcha — use AzCopy, not `az storage blob copy start`:** the snapshot SAS URL is in Azure's internal format `https://<guid>.blob.storage.azure.net/...`. A server-side copy from it has failed with a 403 `AuthenticationFailed` error and no explanation, though not every time ([why AzCopy](#why-azcopy-not-az-storage-blob-copy-start)). AzCopy v10 has worked in every case. Install it with `winget install Microsoft.Azure.AzCopy.10`.
 
 > **Gotcha — Re-granting SAS on an active snapshot:** If you run the script a second time on a snapshot that already has an active SAS, `az snapshot grant-access` returns nothing (empty output). The script handles this by revoking the existing SAS first (`az snapshot revoke-access`) before re-granting. If you're scripting this yourself, be aware that re-granting without revoking first returns empty, which causes the AzCopy source URL to be blank.
 
-Copy the output URI into `terraform.tfvars`:
-
-```hcl
-vhd_uri = "https://flexpackerbuild.blob.core.windows.net/vhd-output/win_server_2025_dc_202607160709.vhd?se=2026-07-23T15%3A01Z&sp=r&spr=https&sv=2026-04-06&sr=b&sig=..."
-```
+Pass the URIs it prints to the import in Step 6.
 
 ---
 
-### Step 6 — Deploy with Terraform
+### Step 6 — Import into Citrix and deploy with Terraform
+
+**Import the image** with the URIs from Step 5. [`06-import-to-citrix.ps1`](#import-an-image) waits until the image is `Ready` and reads back its generation and Trusted Launch flags:
+
+```powershell
+.\packer\scripts\powershell\06-import-to-citrix.ps1 `
+    -Name         WinServer2025DC-1.0.0 `
+    -VhdUri       "<vhd_uri from the export>" `
+    -GuestDiskUri "<guest_disk_uri from the export>" `
+    -Region       eastus
+```
+
+You can also import it in the Citrix Cloud console.
+
+**Deploy the catalog.** In `infra/examples/singlesession-custom-image/terraform.tfvars`, set `image_name` to the name you imported, then:
 
 ```powershell
 # Set secrets — never put these in terraform.tfvars
@@ -672,47 +685,36 @@ terraform apply
 
 #### What gets created
 
-Two resources are created in order:
-
-**1. `citrix_quickdeploy_template_image`** — Registers the VHD as a Citrix image:
+The example looks the imported image up by name, and the catalog module creates the catalog from it:
 
 ```hcl
-resource "citrix_quickdeploy_template_image" "this" {
-  name               = var.image_name
-  os_platform        = "Windows"
-  machine_generation = "V2"
-  region             = var.region
-  subscription_name  = "Citrix Managed"
-  vhd_uri            = var.vhd_uri
-  secure_boot_enabled = var.secure_boot_enabled   # false until VMGS export is implemented
-  vtpm_enabled        = var.vtpm_enabled           # false until VMGS export is implemented
-  # guest_disk_uri   = var.guest_disk_uri          # required when secure_boot_enabled = true
+data "citrix_quickdeploy_template_image" "this" {
+  name = var.image_name
 }
-```
 
-**2. `citrix_quickdeploy_catalog`** (via module) — Creates the machine catalog:
-
-```hcl
 module "catalog" {
-  source            = "../../modules/catalog-multisession"
-  catalog_name      = var.catalog_name
-  persona           = "Task worker (medium)"
-  region            = var.region
-  template_image_id = citrix_quickdeploy_template_image.this.id
-  number_of_users   = var.number_of_users
-  onprem_network_connection_id = var.onprem_network_connection_id
-  domain_name       = var.domain_name
-  domain_ou         = var.domain_ou
+  source = "../../modules/catalog-singlesession"
+
+  catalog_name                    = var.catalog_name
+  persona                         = var.persona
+  region                          = var.region
+  template_image_id               = data.citrix_quickdeploy_template_image.this.id
+  number_of_users                 = var.number_of_users
+  onprem_network_connection_id    = var.onprem_network_connection_id
+  domain_name                     = var.domain_name
+  domain_ou                       = var.domain_ou
   domain_service_account          = var.service_account
   domain_service_account_password = var.service_account_password
 }
 ```
 
-Catalog creation takes 35–40 minutes. It provisions the Azure VMs, domain-joins them, installs Citrix agents, and makes them available in the Citrix delivery group.
+Catalog creation takes 35–40 minutes. It provisions the Azure VMs, domain-joins them, installs Citrix agents, and makes them available in the Citrix delivery group. It finishes in `InputRequired` until users are given access: see [After `terraform apply`](getting-started.md#after-terraform-apply-give-users-access).
 
-> **Gotcha — machine_generation must match the disk:** The `machine_generation` field in `citrix_quickdeploy_template_image` must match the actual generation of the VHD. Setting `"V2"` for a Gen1 VHD (built from a non-g2 SKU) fails at catalog creation with: *"master image could not be verified."* The generation comes from the SKU you used in Packer — not from this Terraform field.
+The image stays out of Terraform's state, so `terraform destroy` removes the catalog but keeps the image for the next one. To import with Terraform instead, replace the data source with a `citrix_quickdeploy_template_image` resource that takes the [same values as the import](#terraform--api-field-map) (provider v1.0.39 or later for Trusted Launch).
 
-> **Gotcha — vTPM + Secure Boot only valid on V2:** Setting `secure_boot_enabled = true` or `vtpm_enabled = true` with `machine_generation = "V1"` is rejected by the API. Both require `"V2"`.
+> **Gotcha — the generation must match the disk:** an image imported as `V2` from a Gen1 VHD (built from a non-g2 SKU) fails at catalog creation with *"master image could not be verified."* The generation comes from the SKU you used in Packer. The templates here use Gen2 SKUs, and `06-import-to-citrix.ps1` imports as `V2`.
+
+> **Gotcha — vTPM and Secure Boot need V2:** the API rejects either one on a `V1` image.
 
 ---
 
@@ -720,12 +722,13 @@ Catalog creation takes 35–40 minutes. It provisions the Azure VMs, domain-join
 
 When you build a new version:
 
-1. Bump `gallery_image_version`, then run steps 4–5 to produce a new gallery version and VHD URI
-2. Update `vhd_uri` in `terraform.tfvars` with the new SAS URI
-3. Update `image_name` if you want a versioned name in the Citrix library
-4. `terraform apply`
+1. Bump `gallery_image_version`, then run steps 4–5 to produce a new gallery version and its VHD URIs.
+2. Import it under a new, versioned name (Step 6), e.g. `WinServer2025DC-1.1.0`.
+3. Set `image_name` in `terraform.tfvars` to the new name.
+4. Run `terraform plan` and check it updates the catalog's image in place. **Don't apply a plan that replaces the catalog:** a replacement deletes it and its machines.
+5. `terraform apply`.
 
-Terraform will update the template image in place and trigger Citrix to update the catalog. Existing sessions are not interrupted; machines are re-imaged on next restart.
+Citrix then moves the catalog to the new image. Existing sessions are not interrupted; machines are re-imaged on next restart.
 
 > **Two warnings, from updates made through the API** (the Terraform path sits on the same service but is untested here):
 > - **The new image's generation and Trusted Launch flags must match the catalog's.** If `hyperVGen`, `vtpmEnabled` or `secureBootEnabled` differ, the update reports success and then the catalog quietly goes back to the old image. So you can't move an existing catalog from a non-Trusted Launch image to a Trusted Launch one this way: create a new catalog from the new image.
@@ -822,7 +825,7 @@ It prints:
 - **The machine profile** MCS builds from: `SecurityType`, Secure Boot, vTPM, accelerated networking, size, and the naming scheme and OU.
 - **Each machine:** power state, registration, maintenance mode and VDA version.
 
-**It fails (exit 1)** when the machine profile's Secure Boot or vTPM differ from the image's, when the image is Trusted Launch but the profile isn't, or when accelerated networking isn't what `-ExpectAcceleratedNetworking` says. That parameter defaults to `$false`: accelerated networking can only be chosen when a catalog is created, and the Terraform provider (`citrix_quickdeploy_catalog`, up to v1.0.41) doesn't send it, so catalogs built from code have it off. Pass `-ExpectAcceleratedNetworking $true` for a catalog created with it on.
+**It fails (exit 1)** when the machine profile's Secure Boot or vTPM differ from the image's, when the image is Trusted Launch but the profile isn't, or when accelerated networking isn't what `-ExpectAcceleratedNetworking` says. That parameter defaults to `$false`: accelerated networking can only be chosen when a catalog is created, and the Terraform provider (`citrix_quickdeploy_catalog`, through v1.0.43-tech-preview) doesn't send it, so catalogs built from code have it off. Pass `-ExpectAcceleratedNetworking $true` for a catalog created with it on.
 
 - **Run it after deployment.** Before that, the broker has no catalog or provisioning scheme yet, and the script says so.
 - **The broker returns some flags as the strings `"True"`/`"False"`.** In PowerShell `[bool]"False"` is `$true`, so the script compares them as strings.
@@ -962,7 +965,7 @@ Manually delete the stuck catalog from Citrix Cloud > Platform Flex > Catalogs i
 
 ## Trusted Launch → `terraform destroy` blocked by provider validation
 
-**Symptom:** After setting `guest_disk_uri` in `main.tf`, `terraform destroy` fails with:
+**Symptom (provider v1.0.38 and earlier):** after setting `guest_disk_uri` in `main.tf`, `terraform destroy` fails with:
 
 ```
 Error: Error validating Template Image configuration
@@ -971,16 +974,9 @@ Guest Disk URI is only applicable when Secure Boot is enabled
 
 This happens even when the `guest_disk_uri` variable value is `null` in `terraform.tfvars`.
 
-**Why it happens:** The citrix/citrix provider's `ValidateResourceConfig` hook runs against the HCL configuration on every plan/apply/destroy cycle, not just on apply. When `guest_disk_uri = var.guest_disk_uri` is present as an attribute in `main.tf`, the provider evaluates it even if the resolved value is null. This appears to be a provider validation bug — a null value should not trigger the "URI is only applicable when..." check.
+**Fixed in provider v1.0.39.** Through v1.0.38 the provider's validation read `secure_boot_enabled` before its value was known, treated it as `false`, and rejected `guest_disk_uri`, on apply and on destroy. v1.0.39 skips rules whose inputs aren't known yet, checks again at create, and no longer treats a null `guest_disk_uri` as set. A retest on v1.0.41 applied and destroyed a Trusted Launch image without errors. The examples require v1.0.39 or later.
 
-**Fix for destroy:** Temporarily remove the `guest_disk_uri = var.guest_disk_uri` line from `main.tf`, run the destroy, then restore it before the next apply.
-
-```hcl
-# Temporarily remove this line from main.tf before terraform destroy:
-guest_disk_uri = var.guest_disk_uri
-```
-
-This is the **only workaround** — passing `-var "guest_disk_uri=null"` on the command line does not work because Terraform passes the literal string `"null"` rather than HCL null to the provider.
+**Fix:** upgrade the provider (`terraform init -upgrade`). Only on v1.0.38 or earlier: remove the `guest_disk_uri` line from `main.tf`, destroy, then put it back. Passing `-var "guest_disk_uri=null"` doesn't help, because Terraform passes the string `"null"`.
 
 ---
 

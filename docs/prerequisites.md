@@ -124,7 +124,7 @@ A [test lab](lab-environment.md) doesn't need ExpressRoute.
 | Tool | Minimum version | Install |
 |---|---|---|
 | Terraform | 1.5 | [terraform.io](https://developer.hashicorp.com/terraform/install) |
-| Citrix Terraform provider | 1.0.36 | Declared in `versions.tf`, auto-installed by `terraform init` |
+| Citrix Terraform provider | 1.0.39 | Declared in `versions.tf`, auto-installed by `terraform init` |
 
 **Windows:**
 ```powershell

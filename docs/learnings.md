@@ -45,9 +45,10 @@ and the Citrix Terraform provider. Each layer surfaced distinct learnings.
   this flag, so the REST path is required.
 
 - **AzCopy v10 successfully transfers both OS VHD and VMGS** (~130 GB OS + ~4 MB VMGS)
-  from Azure snapshot SAS URLs to a customer-controlled storage account. The Azure Blob
-  copy API cannot handle internal Azure snapshot URLs (`*.blob.storage.azure.net`) and
-  must not be used as a substitute.
+  from Azure snapshot SAS URLs to a customer-controlled storage account, in every case
+  tried. A server-side Blob copy from an internal snapshot URL (`*.blob.storage.azure.net`)
+  failed here with a 403, but has succeeded elsewhere for Gen2 snapshots without Trusted
+  Launch, so it doesn't always fail; the cause isn't confirmed. The scripts use AzCopy.
 
 - **The snapshot export script (`03-export-image.ps1`) works end-to-end.** The REST
   `beginGetAccess` approach with `getSecureVMGuestStateSAS: true` returns both the OS SAS
@@ -61,30 +62,21 @@ and the Citrix Terraform provider. Each layer surfaced distinct learnings.
   Confirmed: a TrustedLaunch gallery image version returns the VMGS SAS via this path.
   The temporary disk is deleted after AzCopy completes.
 
-- **The Citrix provider (v1.0.37) accepts `secure_boot_enabled` and `vtpm_enabled`**
-  in the schema — the attributes exist and are settable in principle.
+- **Trusted Launch images import through Terraform from provider v1.0.39.**
+  `citrix_quickdeploy_template_image` with `guest_disk_uri`, `secure_boot_enabled = true`
+  and `vtpm_enabled = true` reached `Ready` in 16 minutes on v1.0.41, and the API read back
+  `V2`, vTPM and Secure Boot. `terraform destroy` of it finished in seconds.
+
+  Through v1.0.38 the provider's validation rejected `guest_disk_uri` on apply and destroy,
+  even with `secure_boot_enabled = true`: it read `secure_boot_enabled` before its value
+  was known and treated it as `false`. `guest_disk_uri` is an input (the API's
+  `vhdEncryptionUri`), not a computed value. v1.0.39 skips rules whose inputs aren't known
+  yet and checks again at create. The examples now require v1.0.39 or later. History:
+  [bug-report-provider-validate-config.md](bug-report-provider-validate-config.md).
 
 ---
 
 ## What we discovered does not yet work
-
-### Provider validation blocks `guest_disk_uri` on apply
-
-`terraform apply` fails at the `ValidateResourceConfig` phase when `guest_disk_uri` is
-present in the configuration, even when `secure_boot_enabled = true` is set alongside it.
-
-Debug logging (`TF_LOG=JSON`) revealed that the provider's `ValidateConfig` method
-receives a zero-valued struct — all user-configured attributes are empty — and the
-cross-attribute check fires unconditionally. This is documented fully in
-[bug-report-provider-validate-config.md](bug-report-provider-validate-config.md).
-
-**Open question for Citrix engineering:** Is `guest_disk_uri` intended to be a
-customer-supplied input, or is it a computed attribute that Citrix resolves internally
-from the uploaded VHD? The answer determines whether this is a provider defect or a
-workflow misunderstanding.
-
-**Current state:** Trusted Launch catalogs cannot be deployed end-to-end via Terraform
-in provider v1.0.37. Manual portal creation is required for the template image step.
 
 ### `terraform destroy` fails for domain-joined catalogs
 
