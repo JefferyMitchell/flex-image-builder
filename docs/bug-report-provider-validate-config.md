@@ -1,5 +1,7 @@
 # Provider Feedback: citrix_quickdeploy_template_image — Trusted Launch configuration
 
+> **Status: fixed in provider v1.0.39.** The validation now skips rules whose inputs aren't known yet, checks again at create, and no longer treats a null `guest_disk_uri` as set. A retest on v1.0.41 applied a Trusted Launch image (`Ready` in 16 minutes; Gen2, vTPM and Secure Boot read back) and destroyed it in seconds. The answer to the question below: `guest_disk_uri` is an input, sent to the API as `vhdEncryptionUri`. This report is kept as history.
+
 **Provider:** `citrix/citrix` v1.0.37  
 **Resource:** `citrix_quickdeploy_template_image`  
 **Source file (from debug log):** `internal/quickdeploy/cma_image/template_image_resource.go:316`  

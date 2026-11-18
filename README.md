@@ -34,7 +34,7 @@ Quick path:
 - Citrix Cloud account with Platform Flex entitlement
 - Citrix Cloud API key (client ID + secret)
 - Terraform >= 1.5
-- Citrix Terraform provider >= 1.0.36
+- Citrix Terraform provider >= 1.0.39
 
 ## Disclaimer
 

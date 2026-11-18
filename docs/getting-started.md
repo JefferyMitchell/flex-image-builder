@@ -114,6 +114,14 @@ terraform apply
 
 A SingleSession catalog typically deploys in **15–20 minutes**. MultiSession takes **25–35 minutes** due to the larger Windows Server image.
 
+## 7. After `terraform apply`: give users access
+
+A new catalog finishes in state **`InputRequired`**, not `Active`, whether Terraform or the API created it. Nobody can launch from it until users are given access, and Terraform doesn't do that step.
+
+In Citrix Cloud, open the catalog under Platform Flex and use **Give users access** to add the users or groups. Saving that flow moves the catalog to `Active`.
+
+> **If users are added another way** (Studio, or the broker API's `DeliveryGroups` endpoint), they can launch at once, but the catalog stays `InputRequired` until someone saves the console flow once. Adding a user there and removing them again is enough. No public API does that step yet.
+
 ---
 
 Next: [Personas](personas.md)
