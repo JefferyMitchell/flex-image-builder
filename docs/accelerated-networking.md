@@ -97,7 +97,7 @@ When it arrives, run `terraform plan` before you apply to a catalog you imported
 
 ## Checking it in the guest
 
-The catalog flag is what was asked for, not proof. On sizes where Azure *requires* accelerated networking (Intel Dsv5, all v6), it's on regardless of the flag; on Dasv5 it follows the flag. Only the guest knows:
+The catalog flag is what was asked for, not proof. On sizes where Azure *requires* accelerated networking (Intel Dsv5, all v6), it's on regardless of the flag; on Dasv5 it follows the flag. `11-check-catalog.ps1 -CatalogName "<name>" -ExpectAcceleratedNetworking $true` reads back what the catalog asked for, from Quick Deploy and from the provisioning scheme MCS uses (read-only). Only the guest knows whether the NIC is accelerated:
 
 ```powershell
 Get-NetAdapter | Format-Table Name, InterfaceDescription, Status
