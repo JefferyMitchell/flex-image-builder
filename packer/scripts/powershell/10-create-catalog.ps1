@@ -15,6 +15,7 @@
 #   .\10-create-catalog.ps1 -Name "Task Worker" -ImageName "<image>" -SessionType MultiSession `
 #       -VnetPeeringName "<peering>" -Domain corp.example -DomainOu "OU=VDAs,DC=corp,DC=example" `
 #       -ServiceAccount svc-join -WhatIf          # print the request (password hidden), send nothing
+#   Optional: -NamingScheme "vda-tw-##" (machine names, # = digit), -SessionTimeoutMinutes 1440 (idle timeout; default 15)
 #
 # The password is read only from the environment variable named by -PasswordVariable, and never printed.
 [CmdletBinding(SupportsShouldProcess)]
@@ -29,6 +30,10 @@ param(
     [int]$MaxUsersPerVm = 2,
     [int]$NumberOfUsers = 2,          # the service sizes the catalog from this: machines = users / MaxUsersPerVm
     [string]$PeakTimeZoneId = "Eastern Standard Time",
+    # Machine names, e.g. "vda-tw-##" (each # is a digit). Without it the service picks the names.
+    [ValidatePattern('^[A-Za-z0-9-]*#+[A-Za-z0-9-]*$')] [ValidateLength(1, 15)] [string]$NamingScheme,
+    # Idle-session timeout in minutes. Never 0: that disconnects an idle session at once. 1440 = a day.
+    [ValidateRange(1, 525600)] [int]$SessionTimeoutMinutes = 15,
     [string]$VnetPeeringName,
     [string]$Domain,
     [string]$DomainOu,
@@ -62,6 +67,11 @@ $addCatalog = [ordered]@{
     isAzureAdJoined             = $false
     enableAcceleratedNetworking = $EnableAcceleratedNetworking
 }
+if ($NamingScheme) {
+    # isSchemeTypeNumeric, not namingSchemeType: the API drops the latter without an error, and the
+    # machines then get letters (vda-tw-AA) instead of digits.
+    $addCatalog.machineNamingScheme = [ordered]@{ namingScheme = $NamingScheme; isSchemeTypeNumeric = $true }
+}
 if ($SessionType -ne "MultiSession") { $MaxUsersPerVm = 1 }
 
 $instanceType = ($VmSize -replace '^(?i)standard_', '' -replace '_', '').ToLowerInvariant()   # Standard_D2as_v5 -> d2asv5, the form the API accepts
@@ -85,7 +95,7 @@ $body = [ordered]@{
     addCatalogCapacity    = [ordered]@{
         computeWorker = [ordered]@{ instanceTypeId = $instanceType; storageType = $StorageType; maxUsersPerVM = $MaxUsersPerVm; useManagedDisks = $true; useAzureHUB = $true }
         scaleSettings = $scale
-        sessionTimeout = 15
+        sessionTimeout = $SessionTimeoutMinutes
         multiSessionDisconnectedSessionTimeout = 0
     }
 }

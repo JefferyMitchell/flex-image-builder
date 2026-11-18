@@ -62,6 +62,8 @@ $env:TF_VAR_domain_service_account_password = "<join account password>"
 
 The script reads the catalog back and fails if `enableAcceleratedNetworking` isn't `true`. That check matters: the API drops fields it doesn't know without an error.
 
+`-NamingScheme vda-tw-##` names the machines (digits; `isSchemeTypeNumeric` is the field the API honours, while `namingSchemeType` is silently dropped and gives letters). `-SessionTimeoutMinutes` sets the idle-session timeout (default 15). Never use 0, which disconnects an idle session at once; demo and lab catalogs often want a day (`1440`).
+
 Things the published API reference doesn't tell you, found while writing it:
 
 - `enableAcceleratedNetworking` isn't in the published Quick Deploy reference. It's in Citrix's generated SDK (`citrix-daas-rest-go`, `AddCitrixManagedCatalogModel`, since v1.0.27).
