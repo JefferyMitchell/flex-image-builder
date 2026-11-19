@@ -2,7 +2,8 @@
 # '#' starts a comment. "id version" pins a version; without one, the newest version at build time is
 # installed, and the build log lists what went in ("installed-app:" lines).
 # Find IDs with "choco search <name>" or at https://community.chocolatey.org/packages
-# Chrome isn't here: the template installs it (install_browser_chrome_flag).
+# Chrome isn't here: the Chocolatey package fails its checksum whenever Google ships a new Chrome first.
+# Install Google's enterprise MSI as an extra installer instead (docs/custom-images.md, "Extra installers").
 notepadplusplus
 7zip
 adobereader
