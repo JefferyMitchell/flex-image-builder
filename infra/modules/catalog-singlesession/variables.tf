@@ -62,3 +62,9 @@ variable "domain_service_account_password" {
   description = "Service account password. Pass via TF_VAR_domain_service_account_password."
   default     = null
 }
+
+variable "enable_accelerated_networking" {
+  type        = bool
+  description = "Turn on accelerated networking on the catalog VMs' NICs. Set at creation only: changing it replaces the catalog."
+  default     = true
+}

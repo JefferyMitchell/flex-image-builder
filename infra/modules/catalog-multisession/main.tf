@@ -6,6 +6,10 @@ resource "citrix_quickdeploy_catalog" "this" {
   template_image_id = var.template_image_id
   number_of_users   = var.number_of_users
 
+  # Needs a citrix/citrix release with enable_accelerated_networking on citrix_quickdeploy_catalog.
+  # Set only at creation: changing it replaces the catalog.
+  enable_accelerated_networking = var.enable_accelerated_networking
+
   on_prem_connectivity = var.onprem_network_connection_id != null ? {
     onprem_network_connection_id = var.onprem_network_connection_id
 
