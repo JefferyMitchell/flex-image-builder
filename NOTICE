@@ -1,0 +1,25 @@
+flex-image-builder
+Copyright 2026 the flex-image-builder authors
+
+This product includes software from citrix-packer-tools
+(https://github.com/citrix/citrix-packer-tools), Copyright 2025 Citrix Systems, Inc.,
+licensed under the Apache License, Version 2.0.
+
+Modified files
+
+packer/templates/win_server_2025_dc_packer_template.json and
+packer/templates/win_desktop_11_23h2_packer_template.json are modified copies of the
+citrix-packer-tools templates azure/v2507/win_server_2025_dc_packer_template.json and
+azure/v2507/win_desktop_11_23h2_packer_template.json (commit 2d3a906). They were changed to:
+- publish a specialized Azure Compute Gallery image version instead of a managed image;
+- build on a Trusted Launch VM with Secure Boot and vTPM on;
+- choose the marketplace SKU and version per build (Gen2 SKUs by default);
+- download the VDA and Optimizer with a managed identity and check their SHA-256 and
+  Authenticode signer before running them;
+- sign in with the Azure CLI by default, and optionally build in a private network;
+- use forward-slash paths and quote the installer paths.
+
+The citrix-packer-tools scripts the templates run (install-vda.ps1, run-optimizer.ps1,
+install-browser-chrome.ps1, install-browser-firefox.ps1, run-cleanup.ps1) are not copied
+into this repository: 02-build.ps1 clones citrix-packer-tools at a pinned commit and runs
+them unchanged.

@@ -513,7 +513,7 @@ For installers that aren't Chocolatey packages and need the same checks as the V
 .\02-build.ps1 -VarsFile win_server_2025.json -Os win_server_2025_dc -InstallersFile .\my.installers.json
 ```
 
-The file is a JSON list. Start from [`packer/installers/example.installers.json`](../packer/installers/example.installers.json):
+The file is a JSON list. Start from [`packer/installers/example.installers.json`](https://github.com/JefferyMitchell/flex-image-builder/blob/main/packer/installers/example.installers.json):
 
 | Field | Required | What it does |
 |---|---|---|
@@ -531,6 +531,25 @@ The file is a JSON list. Start from [`packer/installers/example.installers.json`
 - **What went in:** `installed-extra:` lines in the build log, and `extra_installers` in the build record (file, SHA-256, version, signer, thumbprint).
 - **Unconfigured installs.** The example installs the Session Recording agent with no server settings: on DaaS Flex, the catalog's Session Recording site supplies them.
 - **The WEM agent comes with the VDA.** The VDA installer (2603 and 2607 so far) installs the Workspace Environment Management agent itself, at the VDA's version. A separate WEM entry at that version fails with exit code 1: its installer log shows `WEMAgentInstalledVersion` already set. Add one only to move to a different WEM version, and check its release notes on upgrading over the VDA's copy. Its settings come from Group Policy (the agent ADMX files ship with WEM) or the WEM service.
+
+**Chrome: install it as an extra installer.** The two other ways in aren't reliable:
+
+- **The Chocolatey `googlechrome` package** downloads from Google's unversioned URL, which always serves the newest Chrome, and checks it against the hash recorded when the package was published. When Google ships a new Chrome before the package catches up, the hash doesn't match and the build stops. Pinning the package version doesn't help.
+- **The template's own Chrome step** (citrix-packer-tools `install-browser-chrome.ps1`, `install_browser_chrome_flag`) starts Google's online installer without waiting for it, then reports "Chrome Browser installation completed" without checking. It has finished a build with no Chrome installed.
+
+Instead, download Google's enterprise MSI (`googlechromestandaloneenterprise64.msi`), rename it with its version, and upload it with `01-upload-installers.ps1 -ExtraPaths`. Add it to the installers file, and set `install_browser_chrome_flag` to `"false"` in the vars file:
+
+```json
+{
+  "name": "Google Chrome Enterprise",
+  "blob_url": "https://<storage-account>.blob.core.windows.net/installers/googlechromestandaloneenterprise64_<version>.msi",
+  "sha256": "<SHA-256, from 01-upload-installers.ps1>",
+  "signer": "Google LLC",
+  "arguments": ""
+}
+```
+
+The build then installs exactly the MSI you uploaded, checked by SHA-256 and Google's signature, and `extra_installers` in the build record shows its version. A Chrome update becomes a deliberate upload and rebuild, like the VDA.
 
 **The MSMQ ID on cloned machines.** The Session Recording agent uses Microsoft Message Queuing (MSMQ) by default, so its entry turns on `MSMQ-Server` first, as Citrix's own prerequisite script does. Every machine MCS or PVS makes from the image then starts with the image's MSMQ machine ID (QMId). Citrix documents what follows: recordings go missing and sessions stay "Live" after logoff on pooled machines. Citrix's fix is a startup task that makes a new ID. `"msmq_new_id_at_startup": true` adds one: `\FlexImageBuilder\Reset MSMQ ID at startup` runs `C:\ProgramData\FlexImageBuilder\Reset-MsmqId.ps1` as SYSTEM at startup. The script:
 

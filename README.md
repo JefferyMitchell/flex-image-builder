@@ -39,3 +39,7 @@ Quick path:
 ## Disclaimer
 
 This project is not affiliated with or endorsed by Citrix. It is a community reference implementation. Test in a non-production environment before deploying to production.
+
+## License
+
+Apache License 2.0: see [LICENSE](LICENSE). The Packer templates are modified copies of [citrix-packer-tools](https://github.com/citrix/citrix-packer-tools) templates, also Apache-2.0: see [NOTICE](NOTICE).
