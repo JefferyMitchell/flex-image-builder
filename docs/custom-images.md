@@ -768,7 +768,7 @@ Four scripts take an image through Citrix with the Quick Deploy API instead of T
 | `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
 | `11-check-catalog.ps1` | Reads a deployed catalog back from Quick Deploy and the broker: the machine profile's Trusted Launch flags against the image's, accelerated networking, and each machine's state | Nothing (read-only) |
 
-`10-create-catalog.ps1` (test script) creates a catalog with accelerated networking on through the API. With provider v1.0.43 or later the catalog modules do this themselves, so Terraform users don't need it: see [Accelerated Networking](accelerated-networking.md).
+`10-create-catalog.ps1` (test script) creates a catalog with accelerated networking on through the API. With provider v1.0.43 or later the catalog modules do this themselves, so Terraform users don't need it: see [Accelerated Networking](accelerated-networking.md). With `-HybridEntraJoin` it creates a Microsoft Entra hybrid joined catalog, which Terraform can't: see [Domain Join](domain-join.md#microsoft-entra-hybrid-join).
 
 `07` and `08` take `-CatalogName` or `-CatalogId`; `11` takes `-CatalogName`. All four are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
 

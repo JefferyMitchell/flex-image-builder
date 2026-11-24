@@ -358,3 +358,17 @@ terraform -chdir=infra\examples\<example> destroy
 - **Keep your domain controllers running** during the delete: it reaches AD through the catalog's connectors.
 
 See [Delete a domain-joined catalog](custom-images.md#delete-a-domain-joined-catalog).
+
+---
+
+## Catalog create fails: "reached the maximum catalog limit"
+
+**Symptom:** creating a catalog fails with HTTP 400 *"reached the maximum catalog limit for this account"*, from Terraform, the API or the console. The console also shows a banner.
+
+**Cause:** the tenant's limit on Citrix-managed catalogs. Trial tenants have a low one. `GET catalogservice/{customerId}/{siteId}/catalogs` returns it in `catalogLimit`, for example:
+
+```json
+"catalogLimit": { "serviceState": "ProductionTrial", "citrixManagedLimit": { "limit": 3, "maxVdaCount": 3 } }
+```
+
+**Fix:** delete a catalog you don't need, or ask Citrix to raise the limit. At the limit there's no room for a side-by-side rebuild: delete the old catalog first (wait for `NotFound`), then create its replacement, and plan for the downtime.
