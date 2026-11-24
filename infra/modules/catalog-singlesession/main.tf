@@ -7,6 +7,10 @@ resource "citrix_quickdeploy_catalog" "this" {
   template_image_id = var.template_image_id
   number_of_users   = var.number_of_users
 
+  # citrix/citrix >= 1.0.43. The provider defaults to false; this module defaults to true.
+  # Set only at creation: changing it replaces the catalog.
+  enable_accelerated_networking = var.enable_accelerated_networking
+
   on_prem_connectivity = var.onprem_network_connection_id != null ? {
     onprem_network_connection_id = var.onprem_network_connection_id
 

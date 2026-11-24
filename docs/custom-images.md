@@ -768,7 +768,7 @@ Four scripts take an image through Citrix with the Quick Deploy API instead of T
 | `08-delete-catalog.ps1` | A delete that carries the domain join credentials; waits until the catalog is gone; optionally removes it from Terraform state | Deletes the catalog and its machines |
 | `11-check-catalog.ps1` | Reads a deployed catalog back from Quick Deploy and the broker: the machine profile's Trusted Launch flags against the image's, accelerated networking, and each machine's state | Nothing (read-only) |
 
-`10-create-catalog.ps1` (test script) creates a catalog with accelerated networking on, which Terraform can't do yet. Use it only for that, then import the catalog into Terraform: see [Accelerated Networking](accelerated-networking.md).
+`10-create-catalog.ps1` (test script) creates a catalog with accelerated networking on through the API. With provider v1.0.43 or later the catalog modules do this themselves, so Terraform users don't need it: see [Accelerated Networking](accelerated-networking.md). With `-HybridEntraJoin` it creates a Microsoft Entra hybrid joined catalog, which Terraform can't: see [Domain Join](domain-join.md#microsoft-entra-hybrid-join).
 
 `07` and `08` take `-CatalogName` or `-CatalogId`; `11` takes `-CatalogName`. All four are in `packer/scripts/powershell/` and run under PowerShell 7 on Windows, macOS or Linux.
 
@@ -844,11 +844,11 @@ It prints:
 - **The machine profile** MCS builds from: `SecurityType`, Secure Boot, vTPM, accelerated networking, size, and the naming scheme and OU.
 - **Each machine:** power state, registration, maintenance mode and VDA version.
 
-**It fails (exit 1)** when the machine profile's Secure Boot or vTPM differ from the image's, when the image is Trusted Launch but the profile isn't, or when accelerated networking isn't what `-ExpectAcceleratedNetworking` says. That parameter defaults to `$false`: accelerated networking can only be chosen when a catalog is created, and the Terraform provider (`citrix_quickdeploy_catalog`, through v1.0.43-tech-preview) doesn't send it, so catalogs built from code have it off. Pass `-ExpectAcceleratedNetworking $true` for a catalog created with it on.
+**It fails (exit 1)** when the machine profile's Secure Boot or vTPM differ from the image's, when the image is Trusted Launch but the profile isn't, or when accelerated networking isn't what `-ExpectAcceleratedNetworking` says. That parameter defaults to `$true`, because the catalog modules turn accelerated networking on (provider v1.0.43 or later). Pass `-ExpectAcceleratedNetworking $false` for a catalog created with it off. The flag isn't proof that the guest is accelerated: see [Checking it in the guest](accelerated-networking.md#checking-it-in-the-guest).
 
 - **Run it after deployment.** Before that, the broker has no catalog or provisioning scheme yet, and the script says so.
 - **The broker returns some flags as the strings `"True"`/`"False"`.** In PowerShell `[bool]"False"` is `$true`, so the script compares them as strings.
-- **The flag isn't proof of an accelerated NIC.** On sizes where Azure requires accelerated networking it's on whatever the flag says. In the guest, `Get-NetAdapter` shows a second adapter, Mellanox or Microsoft Azure Network Adapter, Up, when it's on.
+- **The flag isn't proof of an accelerated NIC.** On sizes where Azure requires accelerated networking it's on whatever the flag says. In the guest, a Mellanox or Microsoft Azure Network Adapter carries the traffic when it's on. Check its byte counters: on Server 2025 builds before 26100.33828, `Get-NetAdapter` shows it *Not Present* while it does (see the [known issue](accelerated-networking.md#known-issue-server-2025-shows-the-vf-as-not-present)).
 
 ### Update a catalog's image
 

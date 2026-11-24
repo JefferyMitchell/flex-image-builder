@@ -4,15 +4,19 @@
 # with accelerated networking ON, and fails unless the catalog reads back with it on.
 #
 # Why: accelerated networking is a per-catalog setting that can only be chosen at creation. The field
-# (addCatalog.enableAcceleratedNetworking) is in Citrix's API but not in the published API reference,
-# and the Terraform provider (citrix_quickdeploy_catalog, through v1.0.43-tech-preview) never sends it,
-# so catalogs built from code come out with it OFF. The API also ignores fields it doesn't know without an error,
-# so this script reads the catalog back instead of trusting the 2xx.
+# (addCatalog.enableAcceleratedNetworking) is in Citrix's API but not in the published API reference, and a
+# create call without it gives a catalog with it OFF (as did the Terraform provider before v1.0.43). The API also
+# ignores fields it doesn't know without an error, so this script reads the catalog back instead of trusting the 2xx.
 # See docs/accelerated-networking.md.
 #
-# Terraform is still the way this repo creates catalogs. Use this script only for catalogs that need
-# accelerated networking before the provider supports it, then bring the catalog under Terraform with
-# terraform import (the script prints the command).
+# Terraform is the way this repo creates catalogs: with citrix/citrix >= 1.0.43 the catalog modules turn
+# accelerated networking on themselves. This script is for testing the API path. Importing its catalog into
+# Terraform plans a replacement unless you work around it (docs/accelerated-networking.md, "Importing").
+#
+# -HybridEntraJoin creates Microsoft Entra hybrid joined machines (the console's "Microsoft Entra hybrid" domain
+# type): isDomainJoined and isAzureAdJoined both true, read back as catalogType ManagedHybridEntraIdJoined.
+# Terraform can't create these: citrix/citrix (through v1.0.43) always sends isAzureAdJoined false. See
+# docs/domain-join.md, "Microsoft Entra hybrid join".
 #
 # Usage:
 #   $env:CITRIX_CUSTOMER_ID / CITRIX_CLIENT_ID / CITRIX_CLIENT_SECRET as for 06-import-to-citrix.ps1
@@ -20,7 +24,8 @@
 #   .\10-create-catalog.ps1 -Name "Task Worker" -ImageName "<image>" -SessionType MultiSession `
 #       -Region <azure-region> -VnetPeeringName "<peering>" -Domain corp.example -DomainOu "OU=VDAs,DC=corp,DC=example" `
 #       -ServiceAccount svc-join -WhatIf          # print the request (password hidden), send nothing
-#   Optional: -NamingScheme "vda-tw-##" (machine names, # = digit), -SessionTimeoutMinutes 1440 (idle timeout; default 15)
+#   Optional: -NamingScheme "vda-tw-##" (machine names, # = digit), -SessionTimeoutMinutes 1440 (idle timeout; default 15),
+#             -HybridEntraJoin (Microsoft Entra hybrid joined machines; needs -Domain)
 #
 # The password is read only from the environment variable named by -PasswordVariable, and never printed.
 [CmdletBinding(SupportsShouldProcess)]
@@ -44,6 +49,8 @@ param(
     [string]$DomainOu,
     [string]$ServiceAccount,
     [string]$PasswordVariable = "TF_VAR_domain_service_account_password",
+    # Microsoft Entra hybrid joined machines (catalogType ManagedHybridEntraIdJoined). Needs -Domain.
+    [switch]$HybridEntraJoin,
     [bool]$EnableAcceleratedNetworking = $true,
     [string]$ApiHost = "api.cloud.com",
     [string]$CustomerId = $env:CITRIX_CUSTOMER_ID,
@@ -52,6 +59,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 Write-Warning "Test script: not yet validated for production. Use it on a test catalog."
+if ($HybridEntraJoin -and -not $Domain) { Write-Error "-HybridEntraJoin needs -Domain: hybrid joined machines are joined to AD first." }
 . (Join-Path $PSScriptRoot "citrix-api.ps1")
 
 Write-Host "`nConnecting to Citrix Cloud..."
@@ -70,7 +78,7 @@ $addCatalog = [ordered]@{
     region                      = $Region
     type                        = $SessionType
     isDomainJoined              = [bool]$Domain
-    isAzureAdJoined             = $false
+    isAzureAdJoined             = [bool]$HybridEntraJoin   # with isDomainJoined: Microsoft Entra hybrid joined
     enableAcceleratedNetworking = $EnableAcceleratedNetworking
 }
 if ($NamingScheme) {
@@ -97,7 +105,7 @@ $scale = [ordered]@{
 $body = [ordered]@{
     managedSubscriptionId = $sub.subscriptionId
     addCatalog            = $addCatalog
-    addCatalogImage       = [ordered]@{ templateId = $image[0].id; citrixPrepared = $false }
+    addCatalogImage       = [ordered]@{ templateId = $image[0].id; citrixPrepared = [bool]$image[0].citrixPrepared }   # the image list's own flag
     addCatalogCapacity    = [ordered]@{
         computeWorker = [ordered]@{ instanceTypeId = $instanceType; storageType = $StorageType; maxUsersPerVM = $MaxUsersPerVm; useManagedDisks = $true; useAzureHUB = $true }
         scaleSettings = $scale
@@ -121,21 +129,31 @@ if ($Domain) {
 
 Write-Host "`nRequest:"
 Write-Host (($body | ConvertTo-Json -Depth 6) -replace '("serviceAccountPassword":\s*)"[^"]*"', '$1"<hidden>"')
-if (-not $PSCmdlet.ShouldProcess("$Name ($SessionType, $VmSize, $NumberOfUsers users, accelerated networking $EnableAcceleratedNetworking)", "Create catalog")) { return }
+$identity = if ($HybridEntraJoin) { "Entra hybrid joined" } elseif ($Domain) { "AD joined" } else { "not domain joined" }
+if (-not $PSCmdlet.ShouldProcess("$Name ($SessionType, $VmSize, $NumberOfUsers users, $identity, accelerated networking $EnableAcceleratedNetworking)", "Create catalog")) { return }
 
 $resp = Invoke-CitrixApi POST 'catalogs/$manageddeploy' $body
 $catalogId = if ($resp -is [string]) { $resp.Trim('"') } elseif ($resp.id) { $resp.id } else { Find-CitrixCatalogId $Name }
 Write-Host "`nCatalog id: $catalogId"
 
 $c = Get-CitrixCatalog $catalogId
-Write-Host "Read back: state $($c.state), enableAcceleratedNetworking $($c.enableAcceleratedNetworking), size $($c.vmTypeInstanceType)"
+Write-Host "Read back: state $($c.state), catalogType $($c.catalogType), enableAcceleratedNetworking $($c.enableAcceleratedNetworking), size $($c.vmTypeInstanceType)"
 if ([bool]$c.enableAcceleratedNetworking -ne $EnableAcceleratedNetworking) {
     Write-Error ("enableAcceleratedNetworking reads back as '$($c.enableAcceleratedNetworking)', not $EnableAcceleratedNetworking. " +
         "The API ignored the field. Delete this catalog with 08-delete-catalog.ps1; it can't be changed in place.")
 }
+if ($HybridEntraJoin -and $c.catalogType -ne "ManagedHybridEntraIdJoined") {
+    Write-Error ("catalogType reads back as '$($c.catalogType)', not ManagedHybridEntraIdJoined. " +
+        "Delete this catalog with 08-delete-catalog.ps1; the machine identity can't be changed in place.")
+}
 Write-Host "`nCatalog-level setting confirmed. The catalog deploys its machines next (about 45 minutes)."
 Write-Host "The flag is what was asked for, not proof the NIC is accelerated: check in the guest (docs/accelerated-networking.md)."
-Write-Host "`nTo manage this catalog with Terraform, write its configuration (same name, region, size, image and network),"
-Write-Host "then import it and check the plan shows no changes before you apply:"
-Write-Host "  terraform import module.catalog.citrix_quickdeploy_catalog.this $catalogId"
-Write-Host "  terraform plan"
+Write-Host "`nTo manage this catalog with Terraform, write it as a citrix_quickdeploy_catalog resource (same name, region,"
+Write-Host "size, image and network, enable_accelerated_networking = true) with lifecycle { ignore_changes = [persona, on_prem_connectivity] }."
+Write-Host "Import doesn't read those two back, so without it the first plan replaces the catalog. Then:"
+Write-Host "  terraform import citrix_quickdeploy_catalog.this $catalogId"
+Write-Host "  terraform plan    # must say No changes; never apply a plan that says 'must be replaced'"
+if ($HybridEntraJoin) {
+    Write-Warning ("Terraform (citrix/citrix through v1.0.43) can't express Entra hybrid join. Any replacement it makes " +
+        "recreates this catalog as AD joined only, and the plan doesn't say so. See docs/domain-join.md.")
+}
