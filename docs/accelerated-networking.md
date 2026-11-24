@@ -60,6 +60,7 @@ Upgrading from v1.0.42 to v1.0.43 with an existing catalog plans **no changes**:
 |---|---|---|---|---|
 | Server 2025 + VDA 2607 LTSR, Citrix-prepared (26100.33296) | D8as_v5 | 8 | *Not Present* by +45–104s, every boot | All of it on the VF |
 | Server 2025 + VDA 2607 LTSR, Citrix-prepared (26100.33296) | D4as_v5 | 6 | *Not Present* by +55–78s, every boot | All of it on the VF |
+| Server 2025 + VDA 2607 LTSR, Citrix-prepared (26100.33296) | D2as_v5 | 2 | *Not Present* by +600s, both boots | All of it on the VF |
 | Server 2025, Packer (26100.33674, the TC2b image) | D8as_v5 | 2 | *Not Present*, every boot | All of it on the VF |
 | Server 2025, Packer (26100.33828) | D8as_v5 | 3 | **Up** to +600s, every boot | All of it on the VF |
 | Server 2025, Packer (26100.33828) | D2as_v5 | 3 | Up | — |
@@ -202,7 +203,7 @@ Citrix-managed VDAs don't accept WinRM, RDP or SMB from the peered VNet, so the 
 
 ## Known issue: Server 2025 shows the VF as Not Present
 
-Accelerated networking works on these machines; Windows reports it wrong. On Server 2025 builds before 26100.33828, at D4as_v5 and larger, on every boot:
+Accelerated networking works on these machines; Windows reports it wrong. On Server 2025 builds before 26100.33828, on every boot:
 
 | After boot | What happens |
 |---|---|
@@ -210,7 +211,7 @@ Accelerated networking works on these machines; Windows reports it wrong. On Ser
 | +45–104s | `Get-NetAdapter -IncludeHidden` shows the Mellanox adapter *Not Present*, with no MAC. Nothing in the System log records a VF removal. |
 | afterwards | The VF's PnP device stays present and OK, and a second performance-counter instance of the adapter (`Mellanox … Adapter _2#1`) carries all the traffic. |
 
-- **Seen on:** Citrix's "Win 2025 Server + VDA 2607 LTSR" (26100.33296) at D8as_v5 and D4as_v5, and a Packer image on 26100.33674 at D8as_v5. Every boot, in two tenants, on a different Azure host each time. Same NIC every time: ConnectX-4 Lx VF, mlx5 driver 23.4.26054.0.
+- **Seen on:** Citrix's "Win 2025 Server + VDA 2607 LTSR" (26100.33296) at D8as_v5, D4as_v5 and D2as_v5, and a Packer image on 26100.33674 at D8as_v5. Every boot, in two tenants, on a different Azure host each time. Same NIC every time: ConnectX-4 Lx VF, mlx5 driver 23.4.26054.0.
 - **Not seen on:** Server 2025 26100.33828 at D8as_v5 and D2as_v5; Server 2025 26100.33674 at D2as_v5 (TC6); Windows 11 26H2 at D8as_v5 and D4as_v5.
 - **Not the cause:** the VDA's uberAgent. It installs its network driver `uberAgentNetMon` in the same window, and netvsc pauses and restarts the synthetic adapter when it loads (events 10 and 11, again at each uberAgent restart). But with uberAgent stopped before its drivers loaded, the adapter still went *Not Present*, and the builds that report correctly go through the same pause.
 - **Once it's Not Present, it stays that way.** Restarting the adapter, or Windows, doesn't bring it back. A power cycle from Citrix (a new VM) shows it Up again, until it changes.
@@ -223,8 +224,34 @@ What to do:
 
 ---
 
+## Mellanox and MANA hardware
+
+An accelerated NIC gets one of two kinds of virtual function (VF), depending on the Azure host the VM lands on:
+
+| | Mellanox (NVIDIA ConnectX-3, ConnectX-4 Lx, ConnectX-5) | MANA (Microsoft Azure Network Adapter, part of Azure Boost) |
+|---|---|---|
+| PCI device in the guest | `PCI\VEN_15B3…` | `PCI\VEN_1414&DEV_00BA…`, **Microsoft Azure Network Adapter Virtual Bus** |
+| Adapter in `Get-NetAdapter` | **Mellanox ConnectX-… Virtual Ethernet Adapter** | **Microsoft Azure Network Adapter** |
+| Windows driver | `mlx5` (Azure Marketplace images have it) | The MANA VF driver (`manavf`, `mana_bus_vf`, `mana_ib_vf`): in Azure Marketplace images, or [download it from Microsoft](https://aka.ms/manawindowsdrivers) |
+| Sizes | v5 and older | Every v6 size. Since 26 May 2026, Intel v5 sizes (Dv5, Dsv5, Ddv5, Ddsv5, Dlsv5, Dldsv5, Ev5, Esv5, Edv5, Edsv5) can land on either |
+
+- **An image needs both drivers.** Azure doesn't add or update either one in the VM. On a MANA host without the MANA driver there's no error: the machine runs on the Hyper-V adapter, unaccelerated. `Get-PnpDevice` shows the MANA device, `Get-NetAdapter` has no Microsoft Azure Network Adapter, and the byte-counter check shows only the Hyper-V adapter moving.
+- **Check an image** on a machine made from it. `pnputil /enum-drivers` lists the driver packages that didn't come with Windows:
+
+  ```powershell
+  pnputil /enum-drivers | Select-String -Context 1,4 'Original Name:\s+(manavf|mana_bus_vf|mlx5)\.inf'
+  ```
+
+  `manavf.inf` and `mana_bus_vf.inf` are the MANA driver; `mlx5.inf` is the Mellanox one. Each entry shows its driver version.
+- **The images built here have both.** Windows 11 26H2 and Server 2025 images built in November 2026 carry MANA 2.0.18.52 (the current download, dated 5 August 2026) and `mlx5` 23.4.26054.1. This repo doesn't install either: they come with the Marketplace base image and its updates, so check them after a base image change. Citrix's prepared "Win 2025 Server + VDA 2607 LTSR" image (26100.33296) has an older MANA driver, 2.0.16.29 from November 2025, and the same `mlx5`.
+- **Flex catalogs today run on Mellanox.** Every persona size is AMD v5 (Dasv5, Easv5) or an NVadsA10_v5 GPU size. None is on Microsoft's [list of existing sizes that can land on MANA hardware](https://learn.microsoft.com/azure/virtual-network/accelerated-networking-mana-existing-sizes). Every test boot here got a Mellanox VF (ConnectX-4 Lx, once ConnectX-5 Ex).
+- **Flex doesn't deploy MANA sizes yet.** Quick Deploy catalogs at Standard_D2s_v6 and at Standard_D2s_v5 went to `Error` about a minute after create, with *"An internal error occurred while attempting to deploy the catalog"*. The same request at Standard_D2as_v5 deployed.
+- **Keep the MANA driver in images anyway.** Citrix recommends it for accelerated networking. If a persona size moves to MANA hardware, an image without it silently loses acceleration, and every Flex power cycle is a new VM that can land on a new host.
+
+---
+
 ## Keeping it on
 
 - Create catalogs with the modules and provider v1.0.43 or later; the default is on.
 - Image updates keep it on: `template_image_id` updates in place, and both the catalog and the guest stay accelerated (tested).
-- Changing the size family can turn it off: re-run the guest check. For v6 sizes, the image needs the MANA driver.
+- Changing the size family can turn it off: re-run the guest check. On MANA hardware the image needs the MANA driver (see [Mellanox and MANA hardware](#mellanox-and-mana-hardware)).
