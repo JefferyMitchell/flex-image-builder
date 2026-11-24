@@ -96,7 +96,7 @@ $scale = [ordered]@{
 $body = [ordered]@{
     managedSubscriptionId = $sub.subscriptionId
     addCatalog            = $addCatalog
-    addCatalogImage       = [ordered]@{ templateId = $image[0].id; citrixPrepared = $false }
+    addCatalogImage       = [ordered]@{ templateId = $image[0].id; citrixPrepared = [bool]$image[0].citrixPrepared }   # the image list's own flag
     addCatalogCapacity    = [ordered]@{
         computeWorker = [ordered]@{ instanceTypeId = $instanceType; storageType = $StorageType; maxUsersPerVM = $MaxUsersPerVm; useManagedDisks = $true; useAzureHUB = $true }
         scaleSettings = $scale
