@@ -12,19 +12,20 @@
 # Why both APIs: Quick Deploy reports the request, and it ignores fields it doesn't know without an
 # error. The provisioning scheme is what MCS uses. Neither proves the NIC is accelerated: on sizes where
 # Azure requires accelerated networking it's on whatever the flag says, so check in the guest too
-# (Get-NetAdapter: a Mellanox or Microsoft Azure Network Adapter, Up).
+# (a Mellanox or Microsoft Azure Network Adapter whose byte counters move under load; on Server 2025 builds before
+# 26100.33828 Get-NetAdapter shows it Not Present while it carries the traffic: docs/accelerated-networking.md).
 #
-# Accelerated networking can only be chosen when a catalog is created, and the Terraform provider
-# (citrix_quickdeploy_catalog, through v1.0.43-tech-preview) never sends it, so catalogs built from code have it off.
-# -ExpectAcceleratedNetworking therefore defaults to $false; pass $true for a catalog created with it on.
+# Accelerated networking can only be chosen when a catalog is created. This repo's catalog modules turn it on
+# (citrix/citrix >= 1.0.43), so -ExpectAcceleratedNetworking defaults to $true. Pass $false for a catalog
+# created with it off (provider v1.0.42 or earlier, or a resource that doesn't set it).
 #
 # Usage (credentials as for 06-import-to-citrix.ps1):
 #   .\11-check-catalog.ps1 -CatalogName "Task Worker"
-#   .\11-check-catalog.ps1 -CatalogName "Task Worker" -ExpectAcceleratedNetworking $true
+#   .\11-check-catalog.ps1 -CatalogName "Old Catalog" -ExpectAcceleratedNetworking $false
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string]$CatalogName,
-    [bool]$ExpectAcceleratedNetworking = $false,
+    [bool]$ExpectAcceleratedNetworking = $true,
     [string]$ApiHost = "api.cloud.com",
     [string]$CustomerId = $env:CITRIX_CUSTOMER_ID,
     [string]$ClientId = $env:CITRIX_CLIENT_ID,
@@ -95,4 +96,4 @@ if ($problems.Count) {
     $problems | ForEach-Object { Write-Host "  - $_" }
     exit 1
 }
-Write-Host "`nAll checks passed. The accelerated networking flag is what was requested: Get-NetAdapter in the guest shows the NIC."
+Write-Host "`nAll checks passed. The accelerated networking flag is what was requested: the adapters' byte counters in the guest show the NIC."
