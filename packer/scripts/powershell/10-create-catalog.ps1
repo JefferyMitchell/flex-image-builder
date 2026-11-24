@@ -4,15 +4,14 @@
 # with accelerated networking ON, and fails unless the catalog reads back with it on.
 #
 # Why: accelerated networking is a per-catalog setting that can only be chosen at creation. The field
-# (addCatalog.enableAcceleratedNetworking) is in Citrix's API but not in the published API reference,
-# and the Terraform provider (citrix_quickdeploy_catalog, through v1.0.43-tech-preview) never sends it,
-# so catalogs built from code come out with it OFF. The API also ignores fields it doesn't know without an error,
-# so this script reads the catalog back instead of trusting the 2xx.
+# (addCatalog.enableAcceleratedNetworking) is in Citrix's API but not in the published API reference, and a
+# create call without it gives a catalog with it OFF (as did the Terraform provider before v1.0.43). The API also
+# ignores fields it doesn't know without an error, so this script reads the catalog back instead of trusting the 2xx.
 # See docs/accelerated-networking.md.
 #
-# Terraform is still the way this repo creates catalogs. Use this script only for catalogs that need
-# accelerated networking before the provider supports it, then bring the catalog under Terraform with
-# terraform import (the script prints the command).
+# Terraform is the way this repo creates catalogs: with citrix/citrix >= 1.0.43 the catalog modules turn
+# accelerated networking on themselves. This script is for testing the API path. Importing its catalog into
+# Terraform plans a replacement unless you work around it (docs/accelerated-networking.md, "Importing").
 #
 # Usage:
 #   $env:CITRIX_CUSTOMER_ID / CITRIX_CLIENT_ID / CITRIX_CLIENT_SECRET as for 06-import-to-citrix.ps1
@@ -135,7 +134,8 @@ if ([bool]$c.enableAcceleratedNetworking -ne $EnableAcceleratedNetworking) {
 }
 Write-Host "`nCatalog-level setting confirmed. The catalog deploys its machines next (about 45 minutes)."
 Write-Host "The flag is what was asked for, not proof the NIC is accelerated: check in the guest (docs/accelerated-networking.md)."
-Write-Host "`nTo manage this catalog with Terraform, write its configuration (same name, region, size, image and network),"
-Write-Host "then import it and check the plan shows no changes before you apply:"
-Write-Host "  terraform import module.catalog.citrix_quickdeploy_catalog.this $catalogId"
-Write-Host "  terraform plan"
+Write-Host "`nTo manage this catalog with Terraform, write it as a citrix_quickdeploy_catalog resource (same name, region,"
+Write-Host "size, image and network, enable_accelerated_networking = true) with lifecycle { ignore_changes = [persona, on_prem_connectivity] }."
+Write-Host "Import doesn't read those two back, so without it the first plan replaces the catalog. Then:"
+Write-Host "  terraform import citrix_quickdeploy_catalog.this $catalogId"
+Write-Host "  terraform plan    # must say No changes; never apply a plan that says 'must be replaced'"
